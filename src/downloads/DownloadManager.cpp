@@ -222,7 +222,7 @@ QVariant DownloadManager::data(const QModelIndex &index, int role) const {
     case DetailRole:      return detailOf(j);
     case DestinationRole: return native(j.destDir);
     case ErrorRole:       return j.error;
-    case ActiveRole:      return j.status == Status::Scanning || j.status == Status::Queued || j.status == Status::Running;
+    case ActiveRole:      return j.status == Status::Scanning || j.status == Status::Queued || j.status == Status::Running || j.status == Status::Paused;
     default:              return QVariant();
     }
 }
@@ -247,6 +247,7 @@ QString DownloadManager::statusName(Status s) {
     case Status::Scanning:  return QStringLiteral("scanning");
     case Status::Queued:    return QStringLiteral("queued");
     case Status::Running:   return QStringLiteral("running");
+    case Status::Paused:    return QStringLiteral("paused");
     case Status::Done:      return QStringLiteral("done");
     case Status::Failed:    return QStringLiteral("failed");
     case Status::Cancelled: return QStringLiteral("cancelled");
@@ -264,7 +265,7 @@ double DownloadManager::progressOf(const Job &j) {
     }
 
     double cur = 0.0;
-    if (j.status == Status::Running && j.nextIndex < n) {
+    if ((j.status == Status::Running || j.status == Status::Paused) && j.nextIndex < n) {
         const qint64 total = j.curTotal > 0 ? j.curTotal : j.items[static_cast<size_t>(j.nextIndex)].size;
         if (total > 0) cur = std::clamp(static_cast<double>(j.curBytes) / static_cast<double>(total), 0.0, 1.0);
     }
@@ -307,6 +308,21 @@ QString DownloadManager::detailOf(const Job &j) {
         return parts.join(kDot);
     }
 
+    case Status::Paused: {
+        QStringList parts;
+        if (j.isPack && n > 0) parts << QStringLiteral("File %1 of %2").arg(std::min(j.nextIndex + 1, n)).arg(n);
+
+        if (!total.isEmpty()) {
+            parts << QStringLiteral("%1 of %2").arg(SearchResult::formatBytes(j.doneBytes + j.curBytes), total);
+        } else if (j.curBytes > 0) {
+            parts << (j.curTotal > 0
+                      ? QStringLiteral("%1 of %2").arg(SearchResult::formatBytes(j.curBytes), SearchResult::formatBytes(j.curTotal))
+                      : SearchResult::formatBytes(j.curBytes));
+        }
+        parts << QStringLiteral("Paused");
+        return parts.join(kDot);
+    }
+
     case Status::Done: {
         QStringList parts;
         if (j.isPack) parts << QStringLiteral("%1 files").arg(n);
@@ -335,7 +351,8 @@ DownloadManager::Job *DownloadManager::findJob(int id, int *row) const {
 
 DownloadManager::Job *DownloadManager::findActiveBySource(const QString &url) const {
     for (const auto &j : m_jobs) {
-        const bool active = j->status == Status::Scanning || j->status == Status::Queued || j->status == Status::Running;
+        const bool active = j->status == Status::Scanning || j->status == Status::Queued
+                            || j->status == Status::Running || j->status == Status::Paused;
         if (active && j->sourceUrl == url) return j.get();
     }
     return nullptr;
@@ -362,7 +379,8 @@ void DownloadManager::updateSummary() {
         switch (j->status) {
         case Status::Scanning:
         case Status::Queued:
-        case Status::Running:   ++active; break;
+        case Status::Running:
+        case Status::Paused:    ++active; break;
         default:                finished = true; break;
         }
     }
@@ -905,7 +923,10 @@ void DownloadManager::openPath(const QString &path) {
 
 int DownloadManager::downloadFile(const QString &url, const QString &title) {
     if (url.isEmpty()) return 0;
-    if (const Job *dup = findActiveBySource(url)) return dup->id;
+    if (Job *dup = findActiveBySource(url)) {
+        if (dup->status == Status::Paused) resume(dup->id);
+        return dup->id;
+    }
 
     QString name = QUrl::fromPercentEncoding(url.toUtf8());
     name = name.mid(name.lastIndexOf('/') + 1);
@@ -937,7 +958,10 @@ int DownloadManager::downloadPack(const QString &folderUrl, const QString &title
 
     QString url = folderUrl;
     if (!url.endsWith('/')) url += QLatin1Char('/');
-    if (const Job *dup = findActiveBySource(url)) return dup->id;
+    if (Job *dup = findActiveBySource(url)) {
+        if (dup->status == Status::Paused) resume(dup->id);
+        return dup->id;
+    }
 
     const QString name = packFolderName(url, title);
 
@@ -1343,6 +1367,78 @@ bool DownloadManager::finalizeItem(Job &job) {
 // ============================================================================
 // User actions
 // ============================================================================
+
+void DownloadManager::pause(int id) {
+    Job *job = findJob(id);
+    if (!job) return;
+    if (job->status != Status::Running && job->status != Status::Queued && job->status != Status::Scanning) return;
+
+    job->status = Status::Paused;
+    job->error.clear();
+    job->note.clear();
+    job->speed = 0.0;
+    ++job->scanGen;
+
+    if (job->reply) {
+        QNetworkReply *r = job->reply;
+        job->reply = nullptr;
+        if (job->file && job->httpStatus < 400 && r->bytesAvailable() > 0) {
+            const QByteArray rest = r->readAll();
+            if (job->file->write(rest) == rest.size()) {
+                job->curBytes += rest.size();
+            }
+        }
+        r->disconnect(this);
+        r->abort();
+        r->deleteLater();
+    }
+    closePart(*job, false);   // keep the .part file intact on disk so Resume continues via HTTP Range
+
+    if (!job->partPath.isEmpty() && QFileInfo::exists(job->partPath)) {
+        job->curBytes = QFileInfo(job->partPath).size();
+    }
+
+    FLUX_LOG_INFO("Downloads", QString("Paused '%1'").arg(job->title));
+    touch(*job);
+    updateSummary();
+    pump();
+}
+
+void DownloadManager::resume(int id) {
+    Job *job = findJob(id);
+    if (!job || job->status != Status::Paused) return;
+
+    job->error.clear();
+    job->note.clear();
+    job->attempts = 0;
+
+    if (job->isPack && !job->scanned) {
+        job->items.clear();
+        job->status = Status::Scanning;
+        job->pendingLists = 1;
+        ++job->scanGen;
+        touch(*job);
+        updateSummary();
+        scanFolder(id, job->sourceUrl, QString(), 0, job->scanGen);
+        return;
+    }
+
+    job->status = Status::Queued;
+    FLUX_LOG_INFO("Downloads", QString("Resumed '%1'").arg(job->title));
+    touch(*job);
+    updateSummary();
+    pump();
+}
+
+void DownloadManager::togglePause(int id) {
+    const Job *job = findJob(id);
+    if (!job) return;
+    if (job->status == Status::Paused) {
+        resume(id);
+    } else if (job->status == Status::Running || job->status == Status::Queued || job->status == Status::Scanning) {
+        pause(id);
+    }
+}
 
 void DownloadManager::cancel(int id) {
     Job *job = findJob(id);

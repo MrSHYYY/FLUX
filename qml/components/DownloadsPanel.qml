@@ -230,9 +230,10 @@ Popup {
                                     width: row.status === "scanning" ? 0 : parent.width * Math.max(0, Math.min(1, row.progress))
                                     height: parent.height
                                     radius: 2
-                                    color: Theme.accent
+                                    color: row.status === "paused" ? Theme.textDim : Theme.accent
 
                                     Behavior on width { NumberAnimation { duration: 180 } }
+                                    Behavior on color { ColorAnimation { duration: 150 } }
                                 }
 
                                 // Indeterminate shimmer while scanning a folder
@@ -254,15 +255,29 @@ Popup {
                             }
                         }
 
-                        IconButton {
-                            iconName: "close"
-                            iconSize: 16
-                            implicitWidth: 34
-                            implicitHeight: 34
-                            tip: "Cancel"
-                            tipAbove: false
+                        RowLayout {
+                            spacing: 4
                             Layout.alignment: Qt.AlignVCenter
-                            onClicked: fluxDownloads.cancel(row.jobId)
+
+                            IconButton {
+                                iconName: row.status === "paused" ? "play" : "pause"
+                                iconSize: 15
+                                implicitWidth: 34
+                                implicitHeight: 34
+                                tip: row.status === "paused" ? "Resume" : "Pause"
+                                tipAbove: false
+                                onClicked: fluxDownloads.togglePause(row.jobId)
+                            }
+
+                            IconButton {
+                                iconName: "close"
+                                iconSize: 16
+                                implicitWidth: 34
+                                implicitHeight: 34
+                                tip: "Cancel"
+                                tipAbove: false
+                                onClicked: fluxDownloads.cancel(row.jobId)
+                            }
                         }
                     }
 

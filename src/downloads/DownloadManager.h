@@ -108,6 +108,9 @@ public:
     Q_INVOKABLE int downloadFile(const QString &url, const QString &title);
     Q_INVOKABLE int downloadPack(const QString &folderUrl, const QString &title);
 
+    Q_INVOKABLE void pause(int id);
+    Q_INVOKABLE void resume(int id);
+    Q_INVOKABLE void togglePause(int id);
     Q_INVOKABLE void cancel(int id);
     Q_INVOKABLE void retry(int id);
     Q_INVOKABLE void remove(int id);
@@ -123,7 +126,7 @@ signals:
     void locationError(const QString &message);
 
 private:
-    enum class Status { Scanning, Queued, Running, Done, Failed, Cancelled };
+    enum class Status { Scanning, Queued, Running, Paused, Done, Failed, Cancelled };
 
     struct Item {
         QString url;
