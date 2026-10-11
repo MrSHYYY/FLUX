@@ -44,6 +44,10 @@ const networkCheckAgain = document.querySelector("#network-check-again");
 const networkCheckUrl = "http://172.16.50.4/";
 let activeNetworkCheck = null;
 let networkCheckRun = 0;
+let localNetworkPermission = "unknown";
+getLocalNetworkPermission().then((permission) => {
+  localNetworkPermission = permission;
+});
 
 document.querySelector("#network-check-open").addEventListener("click", runNetworkCheck);
 networkCheckAgain.addEventListener("click", runNetworkCheck);
@@ -73,6 +77,12 @@ async function runNetworkCheck() {
   const timeout = window.setTimeout(() => controller.abort(), 15000);
 
   try {
+    if (localNetworkPermission === "denied") {
+      networkCheckResult.textContent = "Local network access is blocked for this site. Allow it in your browser’s site settings, then try again.";
+      networkCheckIndicator.dataset.state = "failure";
+      return;
+    }
+
     await fetch(networkCheckUrl, {
       method: "GET",
       mode: "no-cors",
@@ -88,7 +98,19 @@ async function runNetworkCheck() {
     }
   } catch (error) {
     if (run === networkCheckRun) {
-      networkCheckResult.textContent = "Couldn’t reach the FLUX network source. It may be unavailable, or your browser may have blocked local network access.";
+      const permission = localNetworkPermission === "unknown"
+        ? await getLocalNetworkPermission()
+        : localNetworkPermission;
+      localNetworkPermission = permission;
+      if (permission === "denied") {
+        networkCheckResult.textContent = "Local network access is blocked for this site. Allow it in your browser’s site settings, then try again.";
+      } else if (permission === "unsupported") {
+        networkCheckResult.textContent = "This browser can’t confirm local network access. Try the latest Chrome or Edge, then allow access if prompted.";
+      } else if (controller.signal.aborted) {
+        networkCheckResult.textContent = "No response from the FLUX network source. Check that you’re on the right network and try again.";
+      } else {
+        networkCheckResult.textContent = "The browser couldn’t reach the FLUX network source. Check its local network permission and try again.";
+      }
       networkCheckIndicator.dataset.state = "failure";
     }
   } finally {
@@ -97,5 +119,15 @@ async function runNetworkCheck() {
       activeNetworkCheck = null;
       networkCheckAgain.disabled = false;
     }
+  }
+}
+
+async function getLocalNetworkPermission() {
+  if (!navigator.permissions?.query) return "unsupported";
+  try {
+    const permission = await navigator.permissions.query({ name: "local-network" });
+    return permission.state;
+  } catch {
+    return "unsupported";
   }
 }
