@@ -141,3 +141,25 @@ html,body{width:100%;height:100%;overflow:hidden}
   .platform-table th,.platform-table td{font-size:11px}
   .platform-table tbody th,.platform-table tbody td{padding-top:3px;padding-bottom:3px}
 }
+
+.network-check-trigger{align-self:flex-start;display:inline-flex;align-items:center;gap:9px;min-height:34px;margin:8px 0 0;padding:7px 11px;border:1px solid #333;border-radius:9px;background:#111;color:#e7e7e7;font:500 11px Manrope,system-ui,sans-serif;cursor:pointer;transition:background .25s ease,border-color .25s ease,transform .35s cubic-bezier(.16,1,.3,1)}
+.network-check-trigger:hover{transform:translate3d(0,-2px,0);background:#191919;border-color:#666}
+.network-check-icon{font-size:16px;line-height:10px}.network-check-arrow{color:#999;margin-left:2px}
+.network-dialog{width:min(640px,calc(100vw - 32px));height:min(720px,calc(100svh - 32px));max-width:none;max-height:none;padding:22px;border:1px solid #383838;border-radius:16px;background:#0c0c0c;color:#f2f3ee;box-shadow:0 24px 80px #000a;grid-template-rows:auto auto minmax(130px,1fr) auto;gap:12px}
+.network-dialog[open]{display:grid}
+.network-dialog::backdrop{background:#000b;backdrop-filter:blur(5px)}
+.network-dialog-head{display:flex;align-items:flex-start;justify-content:space-between;gap:16px}
+.network-dialog-kicker{margin:0 0 6px;font:9px var(--mono);letter-spacing:.14em;color:#929292}
+.network-dialog-head h2{margin:0;font-size:20px;line-height:1.25;font-weight:600;letter-spacing:-.04em}
+.network-dialog-close{width:32px;height:32px;display:grid;place-items:center;border:1px solid #333;border-radius:9px;background:#151515;color:#ddd;font-size:22px;line-height:1;cursor:pointer}
+.network-dialog-copy{margin:0;color:#aaa;font-size:12px;line-height:1.6}
+.network-frame-wrap{min-height:0;overflow:hidden;border:1px solid #333;border-radius:10px;background:#fff}
+.network-frame-wrap iframe{display:block;width:100%;height:100%;min-height:0;border:0;background:#fff;color:#111}
+.network-dialog-foot{display:flex;align-items:center;justify-content:space-between;gap:12px}
+.network-dialog-foot p{margin:0;color:#999;font-size:11px;line-height:1.45}
+.network-result-actions{display:flex;flex:0 0 auto;gap:8px}
+.network-result-button{padding:8px 11px;border:1px solid #393939;border-radius:8px;background:#151515;color:#ddd;font:500 10px Manrope,system-ui,sans-serif;white-space:nowrap;cursor:pointer;transition:background .2s ease,border-color .2s ease}
+.network-result-button:hover{background:#222;border-color:#777}.network-result-button.positive{background:#f2f3ee;border-color:#f2f3ee;color:#111}.network-result-button.positive:hover{background:#fff}
+.network-dialog-foot p[data-result="success"]{color:#f2f3ee}.network-dialog-foot p[data-result="failure"]{color:#c5c5c5}
+@media(max-width:600px){.network-check-trigger{min-height:32px;font-size:10px}.network-dialog{width:calc(100vw - 20px);height:calc(100svh - 20px);padding:16px;gap:10px;grid-template-rows:auto auto minmax(120px,1fr) auto}.network-dialog-head h2{font-size:18px}.network-dialog-copy{font-size:11px}.network-dialog-foot{align-items:flex-start;flex-direction:column}.network-result-actions{width:100%}.network-result-button{flex:1}}
+@media(max-height:600px){.network-check-trigger{min-height:28px;padding:5px 8px;margin-top:5px;font-size:9px}}

@@ -36,3 +36,32 @@ function formatSize(bytes) {
 }
 
 loadLatestRelease();
+
+const networkCheckDialog = document.querySelector("#network-check-dialog");
+const networkCheckFrame = document.querySelector("#network-check-frame");
+const networkCheckResult = document.querySelector("#network-check-result");
+
+document.querySelector("#network-check-open").addEventListener("click", () => {
+  networkCheckResult.textContent = "Allow local network access if your browser asks.";
+  networkCheckResult.removeAttribute("data-result");
+  networkCheckFrame.src = "http://172.16.50.4/";
+  networkCheckDialog.showModal();
+});
+
+document.querySelector("#network-check-close").addEventListener("click", () => {
+  networkCheckDialog.close();
+});
+
+networkCheckDialog.addEventListener("close", () => {
+  networkCheckFrame.removeAttribute("src");
+});
+
+document.querySelector("#network-check-yes").addEventListener("click", () => {
+  networkCheckResult.textContent = "Network check passed. FLUX should work on this network.";
+  networkCheckResult.dataset.result = "success";
+});
+
+document.querySelector("#network-check-no").addEventListener("click", () => {
+  networkCheckResult.textContent = "Couldn’t reach the local page. FLUX likely won’t work on this network.";
+  networkCheckResult.dataset.result = "failure";
+});

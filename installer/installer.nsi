@@ -3,11 +3,11 @@
 !include "FileFunc.nsh"
 
 ; Version: pass it on the command line so it matches CMakeLists.txt, e.g.
-;   makensis /DVERSION=1.5.0 installer\installer.nsi
+;   makensis /DVERSION=1.5.1 installer\installer.nsi
 ; The self-updater downloads the release asset named  FLUX-<version>-Setup.exe
 ; and runs it silently:  FLUX-<version>-Setup.exe /S /NOGUI /D=<install dir>
 !ifndef VERSION
-  !define VERSION "1.5.0"
+  !define VERSION "1.5.1"
 !endif
 
 ; General — Discord-style per-user zero-click setup:

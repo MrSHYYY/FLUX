@@ -38,7 +38,7 @@ struct AppState {
     HWND hwnd = nullptr;
     HANDLE hParentProcess = nullptr;
     std::wstring progressFilePath;
-    std::wstring versionText = L"v1.5.0";
+    std::wstring versionText = L"v1.5.1";
     std::wstring statusStep  = L"Extracting application files\u2026";
 
     float scale = 1.0f;
