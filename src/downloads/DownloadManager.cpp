@@ -4,18 +4,20 @@
 #include "../core/Logger.h"
 
 #include <QCollator>
+#include <QCryptographicHash>
 #include <QDesktopServices>
 #include <QDir>
 #include <QDirIterator>
+#include <QUrl>
 #include <QFileInfo>
 #include <QNetworkReply>
 #include <QNetworkRequest>
 #include <QRegularExpression>
 #include <QSet>
 #include <QStandardPaths>
+#include <QSettings>
 #include <QStringList>
 #include <QTimer>
-#include <QUrl>
 #include <algorithm>
 
 namespace Flux {
@@ -100,6 +102,10 @@ bool isVideoSuffix(const QString &suffix) {
         "MKV", "MP4", "AVI", "MOV", "WMV", "M4V", "TS", "M2TS", "WEBM", "FLV", "MPG", "MPEG"
     };
     return kVideo.contains(suffix.toUpper());
+}
+
+QString downloadIndexKey(const QString &url) {
+    return QString::fromLatin1(QCryptographicHash::hash(url.toUtf8(), QCryptographicHash::Sha256).toHex());
 }
 
 constexpr int kCountCap = 5000;
@@ -1352,6 +1358,7 @@ bool DownloadManager::finalizeItem(Job &job) {
     }
 
     item.done = true;
+    rememberDownloadedFile(item.url, job.finalPath);
     job.doneBytes += partSize;
     ++job.doneCount;
     ++job.nextIndex;
@@ -1362,6 +1369,59 @@ bool DownloadManager::finalizeItem(Job &job) {
     ++m_offlineRevision;
     emit offlineChanged();
     return true;
+}
+
+void DownloadManager::rememberDownloadedFile(const QString &url, const QString &path) const {
+    if (url.isEmpty() || path.isEmpty()) return;
+    QSettings settings;
+    settings.setValue(QStringLiteral("downloads/completed/") + downloadIndexKey(url), path);
+}
+
+QString DownloadManager::downloadedFileForUrl(const QString &url, const QString &title) const {
+    if (url.isEmpty()) return QString();
+    QSettings settings;
+    const QString key = QStringLiteral("downloads/completed/") + downloadIndexKey(url);
+    QString path = settings.value(key).toString();
+    QFileInfo file(path);
+    if (!file.exists() || !file.isFile() || !isVideoSuffix(file.suffix())) {
+        if (!path.isEmpty()) settings.remove(key);
+        path.clear();
+    }
+
+    // Downloads made before the source index existed can still be matched by their
+    // original filename, but ambiguous duplicate filenames are left on the stream.
+    if (path.isEmpty()) {
+        const QStringList segments = QUrl::fromPercentEncoding(QUrl(url).path(QUrl::FullyEncoded).toUtf8())
+                                         .split(QLatin1Char('/'), Qt::SkipEmptyParts);
+        const QString sourceName = segments.isEmpty() ? QString() : sanitizeSegment(segments.last());
+        QString titleName = title.trimmed().isEmpty() ? QString() : sanitizeSegment(title);
+        const QString sourceSuffix = QFileInfo(sourceName).suffix();
+        if (!titleName.isEmpty() && QFileInfo(titleName).suffix().isEmpty() && !sourceSuffix.isEmpty()) {
+            titleName += QLatin1Char('.') + sourceSuffix;
+        }
+        if (!QFileInfo(titleName).suffix().isEmpty() && !isVideoSuffix(QFileInfo(titleName).suffix())) titleName.clear();
+        QStringList candidates;
+        if (!sourceName.isEmpty()) candidates.append(sourceName);
+        if (!titleName.isEmpty() && !candidates.contains(titleName, Qt::CaseInsensitive)) candidates.append(titleName);
+        QStringList matches;
+        QDirIterator it(m_root, QDir::Files | QDir::NoDotAndDotDot, QDirIterator::Subdirectories);
+        while (it.hasNext()) {
+            const QString candidate = it.next();
+            const QFileInfo found(candidate);
+            if (!isVideoSuffix(found.suffix())) continue;
+            for (const QString &name : candidates) {
+                if (found.fileName().compare(name, Qt::CaseInsensitive) == 0) {
+                    matches.append(found.absoluteFilePath());
+                    break;
+                }
+            }
+        }
+        if (matches.size() == 1) {
+            path = matches.first();
+            rememberDownloadedFile(url, path);
+        }
+    }
+    return path.isEmpty() ? QString() : QUrl::fromLocalFile(QFileInfo(path).absoluteFilePath()).toString();
 }
 
 // ============================================================================

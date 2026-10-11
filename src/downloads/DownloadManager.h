@@ -107,6 +107,7 @@ public:
     // already queued/downloading returns the existing job instead of duplicating it.
     Q_INVOKABLE int downloadFile(const QString &url, const QString &title);
     Q_INVOKABLE int downloadPack(const QString &folderUrl, const QString &title);
+    Q_INVOKABLE QString downloadedFileForUrl(const QString &url, const QString &title = QString()) const;
 
     Q_INVOKABLE void pause(int id);
     Q_INVOKABLE void resume(int id);
@@ -195,6 +196,7 @@ private:
     void pump();
     void startNext(Job &job);
     bool finalizeItem(Job &job);
+    void rememberDownloadedFile(const QString &url, const QString &path) const;
     void failJob(Job &job, const QString &message);
     void finishJob(Job &job);
     void closePart(Job &job, bool removeFile);

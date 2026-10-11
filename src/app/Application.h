@@ -12,6 +12,7 @@
 #include "../core/BookmarkManager.h"
 #include "../core/Updater.h"
 #include "../downloads/DownloadManager.h"
+#include "../downloads/MediaCache.h"
 #include "../teleparty/TelepartySession.h"
 #include "../teleparty/TelepartySync.h"
 
@@ -39,6 +40,7 @@ private:
     std::unique_ptr<SearchManager> m_searchManager;
     std::unique_ptr<FolderBrowser> m_folderBrowser;
     std::unique_ptr<DownloadManager> m_downloads;
+    std::unique_ptr<MediaCache> m_mediaCache;
     std::unique_ptr<TelepartySession> m_teleparty;
     std::unique_ptr<TelepartySync> m_sync;
     std::unique_ptr<UserStore> m_userStore;

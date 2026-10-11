@@ -161,6 +161,7 @@ void Updater::checkForUpdates(bool silent)
         return;
     }
 
+    m_hasUpdate = false;
     setState(State::Checking);
 
     QNetworkRequest request{QUrl(QString::fromLatin1(kLatestReleaseApi))};

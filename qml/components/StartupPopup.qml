@@ -43,7 +43,7 @@ Window {
     }
 
     function evaluateUpdaterState() {
-        if (!fluxUpdater || popup.doneEmitted) {
+        if (!fluxUpdater || popup.doneEmitted || popup.phase === "starting") {
             return
         }
         var st = fluxUpdater.state

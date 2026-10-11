@@ -47,6 +47,7 @@ bool Application::initialize(QQmlApplicationEngine &engine) {
     m_searchManager = std::make_unique<SearchManager>(this);
     m_folderBrowser = std::make_unique<FolderBrowser>(this);
     m_downloads = std::make_unique<DownloadManager>(m_folderBrowser.get(), this);
+    m_mediaCache = std::make_unique<MediaCache>(this);
     m_userStore = std::make_unique<UserStore>(this);
     m_bookmarks = std::make_unique<BookmarkManager>(this);
     m_updater = std::make_unique<Updater>(this);
@@ -142,6 +143,7 @@ bool Application::initialize(QQmlApplicationEngine &engine) {
     rootContext->setContextProperty("fluxSearch", m_searchManager.get());
     rootContext->setContextProperty("fluxBrowser", m_folderBrowser.get());
     rootContext->setContextProperty("fluxDownloads", m_downloads.get());
+    rootContext->setContextProperty("fluxCache", m_mediaCache.get());
     rootContext->setContextProperty("fluxUser", m_userStore.get());
     rootContext->setContextProperty("fluxBookmarks", m_bookmarks.get());
     rootContext->setContextProperty("fluxUpdater", m_updater.get());

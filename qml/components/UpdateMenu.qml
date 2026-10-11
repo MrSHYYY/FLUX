@@ -256,6 +256,44 @@ Popup {
                     wrapMode: Text.Wrap
                 }
             }
+
+            Rectangle {
+                Layout.fillWidth: true
+                implicitHeight: 1
+                color: Theme.border
+            }
+
+            RowLayout {
+                Layout.fillWidth: true
+                Layout.leftMargin: 16
+                Layout.rightMargin: 16
+                Layout.bottomMargin: 16
+                spacing: 10
+
+                ColumnLayout {
+                    Layout.fillWidth: true
+                    spacing: 2
+                    Text {
+                        text: "Viewing cache"
+                        color: Theme.text
+                        font.pixelSize: 12
+                        font.weight: Font.DemiBold
+                    }
+                    Text {
+                        text: fluxCache ? fluxCache.sizeText : "0.00 GB of 10 GB"
+                        color: Theme.textMute
+                        font.pixelSize: 11
+                    }
+                }
+
+                FluxButton {
+                    text: "Clear"
+                    variant: "secondary"
+                    implicitHeight: 32
+                    enabled: !!fluxCache && fluxCache.sizeBytes > 0
+                    onClicked: fluxCache.clearCache()
+                }
+            }
         }
     }
 }

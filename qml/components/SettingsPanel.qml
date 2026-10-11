@@ -290,6 +290,55 @@ Popup {
                     }
                 }
 
+                SectionLabel {
+                    text: "VIEWING CACHE"
+                    Layout.leftMargin: 22
+                    Layout.topMargin: 20
+                }
+
+                Rectangle {
+                    Layout.fillWidth: true
+                    Layout.leftMargin: 22
+                    Layout.rightMargin: 22
+                    Layout.topMargin: 10
+                    implicitHeight: 76
+                    radius: 14
+                    color: Theme.surface
+                    border.width: 1
+                    border.color: Theme.border
+
+                    RowLayout {
+                        anchors.fill: parent
+                        anchors.leftMargin: 18
+                        anchors.rightMargin: 18
+                        spacing: 12
+
+                        ColumnLayout {
+                            Layout.fillWidth: true
+                            spacing: 3
+                            Text {
+                                text: "Recently watched media"
+                                color: Theme.text
+                                font.pixelSize: 14
+                                font.weight: Font.DemiBold
+                            }
+                            Text {
+                                text: fluxCache ? fluxCache.sizeText : "0.00 GB of 10 GB"
+                                color: Theme.textMute
+                                font.pixelSize: 12
+                            }
+                        }
+
+                        FluxButton {
+                            text: "Clear cache"
+                            variant: "secondary"
+                            implicitHeight: 36
+                            enabled: !!fluxCache && fluxCache.sizeBytes > 0
+                            onClicked: fluxCache.clearCache()
+                        }
+                    }
+                }
+
                 // ---- Library targets ----
                 SectionLabel {
                     text: "LIBRARY TARGETS"

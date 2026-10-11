@@ -25,6 +25,8 @@ ApplicationWindow {
     property string currentPage: "search" // "search" | "library" | "player"
     property string pageBeforePlayer: "search" // where Back from the player returns to
     property string currentPlayingTitle: ""
+    property string cacheSourceUrl: ""
+    property string cacheSourceTitle: ""
     readonly property bool inTeleparty: !!fluxTeleparty && fluxTeleparty.active
 
     // Round floating button for the bottom-right dock (optional badge = active downloads)
@@ -127,15 +129,29 @@ ApplicationWindow {
     }
 
     function playMedia(url, title) {
+        var sourceUrl = url
+        var playbackUrl = url
         // Teleparty is for direct streams only. Offline Library playback stays outside the room.
         if (window.inTeleparty && fluxSync && !fluxSync.isStreamUrl(url)) {
             return
         }
 
+        if (!window.inTeleparty) {
+            var downloadedUrl = fluxDownloads ? fluxDownloads.downloadedFileForUrl(sourceUrl, title) : ""
+            var cachedUrl = (!downloadedUrl && fluxCache) ? fluxCache.cachedFileForUrl(sourceUrl) : ""
+            if (downloadedUrl) playbackUrl = downloadedUrl
+            else if (cachedUrl) playbackUrl = cachedUrl
+            else if (fluxSync && fluxSync.isStreamUrl(sourceUrl)) {
+                cacheSourceUrl = sourceUrl
+                cacheSourceTitle = title
+                cacheAfterPlaybackTimer.restart()
+            }
+        }
+
         // Clicking the video the party is already watching (e.g. from Continue Watching
         // after joining late) joins at the party's live timestamp instead of restarting from 0
         if (window.inTeleparty && fluxSync && fluxSync.hasPartyMedia
-                && window.sameMediaUrl(fluxSync.currentUrl, url)) {
+                && window.sameMediaUrl(fluxSync.currentUrl, sourceUrl)) {
             fluxSync.joinPartyPlayback()
             return
         }
@@ -146,24 +162,38 @@ ApplicationWindow {
 
         // Read the saved position BEFORE noteStart() touches the history entry.
         // In a Teleparty everyone starts together from the beginning.
-        var resumeMs = (!window.inTeleparty && fluxUser) ? fluxUser.resumePositionFor(url) : 0
-        if (fluxUser) fluxUser.noteStart(url, title)
+        var resumeMs = (!window.inTeleparty && fluxUser) ? fluxUser.resumePositionFor(sourceUrl) : 0
+        if (fluxUser) fluxUser.noteStart(sourceUrl, title)
 
         // Look up the next episode in the background (for the "Up next" card)
-        if (fluxBrowser) fluxBrowser.findNext(url)
+        if (fluxBrowser) fluxBrowser.findNext(sourceUrl)
 
         playerView.offerResume(resumeMs)
 
         if (fluxPlayer) {
             if (resumeMs > 0) {
-                fluxPlayer.playFrom(url, resumeMs)
+                fluxPlayer.playFrom(playbackUrl, resumeMs)
             } else {
-                fluxPlayer.play(url)
+                fluxPlayer.play(playbackUrl)
             }
         }
 
         if (window.inTeleparty && fluxSync) {
-            fluxSync.broadcastOpen(url, title)
+            fluxSync.broadcastOpen(sourceUrl, title)
+        }
+    }
+
+    Timer {
+        id: cacheAfterPlaybackTimer
+        interval: 30000
+        repeat: false
+        onTriggered: {
+            if (!window.inTeleparty && fluxPlayer && fluxPlayer.isPlaying
+                    && window.sameMediaUrl(fluxPlayer.url, window.cacheSourceUrl)
+                    && fluxDownloads && !fluxDownloads.downloadedFileForUrl(window.cacheSourceUrl, window.cacheSourceTitle)
+                    && fluxCache) {
+                fluxCache.cacheMedia(window.cacheSourceUrl, window.cacheSourceTitle)
+            }
         }
     }
 

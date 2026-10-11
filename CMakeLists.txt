@@ -59,6 +59,8 @@ qt_add_executable(FLUX WIN32
     src/search/FolderBrowser.cpp
     src/downloads/DownloadManager.h
     src/downloads/DownloadManager.cpp
+    src/downloads/MediaCache.h
+    src/downloads/MediaCache.cpp
     src/teleparty/SyncplayClient.h
     src/teleparty/SyncplayClient.cpp
     src/teleparty/TelepartyEngine.h
