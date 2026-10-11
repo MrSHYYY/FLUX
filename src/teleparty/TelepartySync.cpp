@@ -1044,7 +1044,7 @@ void TelepartySync::handlePlaybackTransition(const QString &type, const QVariant
                                 : data.value(QStringLiteral("eid")).toString();
 
     const qint64 estHostNow = estimatedHostNowMs();
-    const qint64 targetHostMs = (rawHt > 0 && m_clockEstimator.hasEstimate()) ? rawHt : estHostNow;
+    qint64 targetHostMs = (rawHt > 0 && m_clockEstimator.hasEstimate()) ? rawHt : estHostNow;
 
     ScheduledAction action;
     action.revision = rev;
@@ -1067,6 +1067,15 @@ void TelepartySync::handlePlaybackTransition(const QString &type, const QVariant
         action.type = ScheduledActionType::Seek;
         action.playing = m_timeline.isValid() ? m_timeline.snapshot().playing : m_partyPlaying;
         action.activityNote = QStringLiteral("Skipped to ") + formatTime(t);
+    }
+
+    if (action.type == ScheduledActionType::Pause || action.type == ScheduledActionType::Seek) {
+        // Pause and seek are direct user commands. Queueing either against a remote
+        // clock estimate can add up to two seconds of apparent input lag. Apply them
+        // when received; keep their media position intact and leave play scheduling
+        // unchanged.
+        targetHostMs = estHostNow;
+        action.targetHostTimestampMs = targetHostMs;
     }
 
     const QString hostPeerId = m_session ? m_session->hostMemberId() : QString();
