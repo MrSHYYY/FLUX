@@ -19,7 +19,9 @@ constexpr int kMaxTitleLength = 300;
 constexpr qint64 kOpenDedupeMs = 8000;       // same video opened twice within this = one open
 constexpr int kSeekMergeMs = 40;             // VLCPlayer already coalesces local seeks; keep this minimal
 constexpr int kStateWaitMs = 5000;           // how long we accept a "state" answer after asking
-constexpr int kDriftTickIntervalMs = 500;    // periodic drift evaluation cadence
+// Drift correction is a safety net, not a frame-by-frame synchronizer. A slower
+// cadence avoids repeatedly touching VLC while network streams are buffering.
+constexpr int kDriftTickIntervalMs = 30000;
 constexpr qint64 kCatchUpDriftMs = 650;      // initial join catch-up seek threshold
 constexpr qint64 kSoftLogCooldownMs = 2000;  // rate-limit soft drift logs
 constexpr qint64 kReadinessMinIntervalMs = 800;
@@ -98,6 +100,16 @@ TelepartySync::TelepartySync(TelepartySession *session, VLCPlayer *player, QObje
     , m_player(player)
     , m_catalog(this)
     , m_clock(std::make_shared<SystemMonotonicClock>()) {
+
+    // Prefer uninterrupted playback. Only make a corrective seek after a clear,
+    // sustained offset; never rate-nudge streams, which can trigger rebuffering.
+    AdaptiveDriftController::Config driftConfig = m_driftController.config();
+    driftConfig.deadbandMs = 10000;
+    driftConfig.softSeekThresholdMs = 10000;
+    driftConfig.hardSeekThresholdMs = 10000;
+    driftConfig.pausedSeekThresholdMs = 10000;
+    driftConfig.fallbackSeekThresholdMs = 10000;
+    m_driftController.setConfig(driftConfig);
 
     m_stateTimer.setSingleShot(true);
     connect(&m_stateTimer, &QTimer::timeout, this, [this]() { m_needState = false; });
@@ -376,34 +388,8 @@ bool TelepartySync::isStreamUrl(const QString &url) const {
     return !encodeCatalogMovieId(url).isEmpty();
 }
 
-bool TelepartySync::isLocalFileUrl(const QString &urlOrPath) const {
-    const QString trimmed = urlOrPath.trimmed();
-    if (trimmed.isEmpty()) return false;
-    if (trimmed.startsWith(QLatin1String("http://"), Qt::CaseInsensitive) ||
-        trimmed.startsWith(QLatin1String("https://"), Qt::CaseInsensitive) ||
-        trimmed.startsWith(QLatin1String("local://"), Qt::CaseInsensitive)) {
-        return false;
-    }
-    QString localPath = trimmed;
-    if (localPath.startsWith(QLatin1String("file://"), Qt::CaseInsensitive)) {
-        localPath = QUrl(localPath).toLocalFile();
-    }
-    if (localPath.isEmpty()) return false;
-    return LocalMediaInspector::isSupportedContainer(LocalMediaInspector::normalizeContainerFormat(localPath));
-}
-
 void TelepartySync::broadcastOpen(const QString &url, const QString &title) {
-    if (!m_session || !m_session->active()) return;
-
-    if (isLocalFileUrl(url)) {
-        const qint64 knownDur = (m_player && m_player->durationMs() > 0) ? m_player->durationMs() : 0;
-        if (m_session->isHost()) {
-            broadcastLocalOpen(url, title, knownDur);
-        } else {
-            selectGuestLocalMedia(url, title, knownDur);
-        }
-        return;
-    }
+    if (!m_session || !m_session->active() || !isStreamUrl(url)) return;
 
     const QString movieId = encodeCatalogMovieId(url);
     if (movieId.isEmpty()) return;
@@ -432,14 +418,6 @@ void TelepartySync::broadcastOpen(const QString &url, const QString &title) {
 
 void TelepartySync::adoptCurrent(const QString &url, const QString &title) {
     if (!m_session || !m_session->active()) return;
-
-    if (isLocalFileUrl(url)) {
-        if (m_session->isHost()) {
-            const qint64 knownDur = (m_player && m_player->durationMs() > 0) ? m_player->durationMs() : 0;
-            broadcastLocalOpen(url, title, knownDur);
-        }
-        return;
-    }
 
     if (!isStreamUrl(url)) return;
     const QString movieId = encodeCatalogMovieId(url);
@@ -886,12 +864,6 @@ void TelepartySync::handleReadiness(const QVariantMap &data, const QString &from
 void TelepartySync::onEvent(const QString &type, const QVariantMap &data, const QString &from) {
     if (type == QLatin1String("open")) {
         handleOpen(data, from);
-    } else if (type == QLatin1String("lopen")) {
-        handleLocalOpen(data, from);
-    } else if (type == QLatin1String("lver")) {
-        handleLocalVerifyReport(data, from);
-    } else if (type == QLatin1String("lstart")) {
-        handleLocalStartCommit(data, from);
     } else if (type == QLatin1String("state")) {
         handleState(data, from);
     } else if (type == QLatin1String("syncme")) {
@@ -2332,7 +2304,7 @@ void TelepartySync::evaluateDriftTick() {
     obs.isSeekable = m_player->isSeekable();
     obs.isEndedOrStopped = (st == QLatin1String("Ended") || st == QLatin1String("Stopped"));
     obs.currentRate = m_player->playbackRate();
-    obs.rateControlSupported = m_rateControlSupported;
+    obs.rateControlSupported = false;
 
     const qint64 estHostNow = estimatedHostNowMs();
     const TimelineSnapshot &snap = m_timeline.snapshot();
@@ -2360,7 +2332,6 @@ void TelepartySync::evaluateDriftTick() {
         case DriftCorrectionMode::RateAdjust: {
             const bool accepted = m_player->remoteSetRate(dec.targetRate);
             if (!accepted) {
-                m_rateControlSupported = false;
                 m_driftController.notifyRateControlFailed();
                 FLUX_LOG_WARN("Teleparty", "Playback rate adjustment unsupported by stream; falling back to seek control");
             } else if (m_lastSoftLogLocalMs == 0 || (localNow - m_lastSoftLogLocalMs) >= kSoftLogCooldownMs) {
@@ -2557,7 +2528,6 @@ void TelepartySync::noteOpen(const QString &url, const QString &title, qint64 re
     m_syncOnPlay = false;
     m_announceOnPlay = false;
     m_reanchorStateOnFirstClockLock = false;
-    m_rateControlSupported = true;
 
     m_scheduler.reset();
     m_driftController.reset();
@@ -2604,7 +2574,6 @@ void TelepartySync::resetParty() {
     m_announceOnPlay = false;
     m_hasPendingSeek = false;
     m_reanchorStateOnFirstClockLock = false;
-    m_rateControlSupported = true;
     m_lastDriftTickLocalMs = 0;
     m_lastClockPingLocalMs = 0;
     m_lastSoftLogLocalMs = 0;

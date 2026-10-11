@@ -83,18 +83,13 @@ public:
     // True for validated catalog http(s) URLs
     Q_INVOKABLE bool isStreamUrl(const QString &url) const;
 
-    // True for local filesystem paths or file:// URLs with supported video containers
-    Q_INVOKABLE bool isLocalFileUrl(const QString &urlOrPath) const;
-
     // Encodes a catalog stream URL into a compact movie/catalog ID (empty if not in local catalog)
     QString encodeCatalogMovieId(const QString &url) const;
 
     // Resolves and validates a remote event payload ({id, n} or {url, title}) against the local catalog
     bool resolveCatalogMovie(const QVariantMap &data, QString &outUrl, QString &outTitle) const;
 
-    // The local user opened a video:
-    // - Catalog stream URL -> OnlineCatalog mode ("open")
-    // - Local file URL/path -> LocalFile mode ("lopen" if host, or guest verification if guest)
+    // Broadcast a catalog stream selected by the local user. Offline files are not shared.
     Q_INVOKABLE void broadcastOpen(const QString &url, const QString &title);
 
     // Host declares or replaces the shared local video for a Local Teleparty session
@@ -284,7 +279,6 @@ private:
 
     bool m_watching = false;
     int m_internalActionDepth = 0;
-    bool m_rateControlSupported = true;
     bool m_useScheduledLeadTime = false;
 
     // The video the whole party is on (empty = none yet)

@@ -127,14 +127,8 @@ ApplicationWindow {
     }
 
     function playMedia(url, title) {
-        // During a Teleparty, only validated catalog streams or supported local video files are allowed
-        if (window.inTeleparty && fluxSync && !fluxSync.isStreamUrl(url) && !fluxSync.isLocalFileUrl(url)) {
-            return
-        }
-
-        // Guest selecting a local video in a Local Teleparty session: verify compatibility first
-        if (window.inTeleparty && fluxSync && fluxTeleparty && !fluxTeleparty.isHost && fluxSync.isLocalFileUrl(url)) {
-            fluxSync.selectGuestLocalMedia(url, title)
+        // Teleparty is for direct streams only. Offline Library playback stays outside the room.
+        if (window.inTeleparty && fluxSync && !fluxSync.isStreamUrl(url)) {
             return
         }
 
@@ -358,12 +352,10 @@ ApplicationWindow {
 
         function onJoinedSession() {
             if (fluxPlayer && fluxPlayer.url.length > 0) {
-                if (fluxSync && (fluxSync.isStreamUrl(fluxPlayer.url) || fluxSync.isLocalFileUrl(fluxPlayer.url))) {
-                    // Host already watching (or paused on) a stream or local video: make it the party's current video
+                if (fluxSync && fluxSync.isStreamUrl(fluxPlayer.url)) {
+                    // Host already watching (or paused on) a direct stream: make it the party's current video
                     if (fluxTeleparty.isHost && fluxPlayer.state !== "Idle" && fluxPlayer.state !== "Stopped") {
                         fluxSync.adoptCurrent(fluxPlayer.url, window.currentPlayingTitle)
-                    } else if (!fluxTeleparty.isHost && fluxSync.isLocalFileUrl(fluxPlayer.url)) {
-                        fluxPlayer.pause()
                     }
                 } else {
                     fluxPlayer.stop()
@@ -383,12 +375,6 @@ ApplicationWindow {
         function onPartyMediaAvailable(url, title, positionMs, durationMs) {
             if (fluxUser && !url.startsWith("local://")) {
                 fluxUser.notePartyMedia(url, title, positionMs, durationMs)
-            }
-        }
-
-        function onLocalMediaPromptRequested(expectedTitle, expectedDurationMs, expectedContainer) {
-            if (window.currentPage !== "library") {
-                window.showLibrary()
             }
         }
 
@@ -522,7 +508,7 @@ ApplicationWindow {
                                                 : (currentPage === "search" ? (searchPage.bookmarksOpen ? "bookmarks" : "home") : "")
             overlayMode: currentPage === "player"
             shown: !window.isFullscreen && (currentPage !== "player" || playerView.showControls || menuOpen)
-            offlineLocked: false
+            offlineLocked: window.inTeleparty
             showNowPlaying: !!fluxPlayer
                             && (fluxPlayer.isPlaying
                                 || (window.inTeleparty

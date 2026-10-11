@@ -222,7 +222,7 @@ Item {
                 label: "Library"
                 current: root.section === "library"
                 locked: root.offlineLocked
-                lockedTip: "Offline playback is unavailable during a Teleparty"
+                lockedTip: "Leave the Teleparty to open Offline Library videos"
                 onClicked: root.libraryClicked()
             }
         }
