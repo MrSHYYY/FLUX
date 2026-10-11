@@ -36,8 +36,15 @@ Item {
         var revision = fluxDownloads ? fluxDownloads.offlineRevision : 0
         var tick = root.refreshTick
         if (!root.active || !fluxDownloads) return []
-        if (root.searching) return fluxDownloads.offlineSearch(root.query)
-        return fluxDownloads.offlineList(root.rel)
+        var raw = root.searching ? fluxDownloads.offlineSearch(root.query)
+                                 : fluxDownloads.offlineList(root.rel)
+        var folders = []
+        var videos = []
+        for (var i = 0; i < raw.length; ++i) {
+            if (raw[i].kind === "folder") folders.push(raw[i])
+            else videos.push(raw[i])
+        }
+        return folders.concat(videos)
     }
 
     // Parent folder (the manager knows about the Series / Individuals containers and added targets)
@@ -249,233 +256,111 @@ Item {
             }
         }
 
-        // ---- Listing ----
-        Rectangle {
+        // ---- Empty state ----
+        ColumnLayout {
+            Layout.alignment: Qt.AlignHCenter
+            Layout.topMargin: 70
+            spacing: 10
+            visible: root.entries.length === 0
+
+            Rectangle {
+                Layout.alignment: Qt.AlignHCenter
+                implicitWidth: 72
+                implicitHeight: 72
+                radius: 36
+                color: Theme.surface
+                border.width: 1
+                border.color: Theme.border
+
+                FluxIcon {
+                    anchors.centerIn: parent
+                    name: root.searching ? "search" : "folder"
+                    size: 30
+                    color: Theme.textMute
+                }
+            }
+
+            Text {
+                Layout.alignment: Qt.AlignHCenter
+                Layout.topMargin: 8
+                text: root.searching ? "No matches in your library"
+                                     : (root.rel.length === 0 ? "Nothing downloaded yet" : "No videos in this folder")
+                color: Theme.text
+                font.pixelSize: 20
+                font.weight: Font.DemiBold
+            }
+
+            Text {
+                Layout.alignment: Qt.AlignHCenter
+                text: root.searching ? "Try fewer or different words."
+                                     : "Downloaded movies and series show up here and play without an internet connection."
+                color: Theme.textDim
+                font.pixelSize: 14
+            }
+        }
+
+        // ---- Card grid (same presentation as Bookmarks) ----
+        GridView {
+            id: libraryGrid
+
+            readonly property int columns: Math.max(1, Math.floor(width / 250))
+
             Layout.fillWidth: true
             Layout.fillHeight: true
-            radius: 14
-            color: Theme.bgRaised
-            border.width: 1
-            border.color: Theme.border
+            visible: root.entries.length > 0
             clip: true
+            model: root.entries
+            cellWidth: Math.floor(width / columns)
+            cellHeight: Math.round(cellWidth * 0.62) + 14
+            boundsBehavior: Flickable.StopAtBounds
+            cacheBuffer: 800
 
-            ListView {
-                id: libraryList
+            ScrollBar.vertical: FluxScrollBar { }
 
-                anchors.fill: parent
-                anchors.margins: 1
-                clip: true
-                model: root.entries
-                boundsBehavior: Flickable.StopAtBounds
+            footer: Item {
+                width: libraryGrid.width
+                height: 32
+            }
 
-                // Section headings ("TV Series & Packs" / "Movies") only on the top level
-                section.property: (root.rel.length === 0 && !root.searching) ? "section" : ""
-                section.criteria: ViewSection.FullString
-                section.delegate: Item {
-                    required property string section
+            delegate: SearchResultCard {
+                required property var modelData
+                required property int index
 
-                    width: ListView.view.width
-                    height: 40
-
-                    Text {
-                        anchors.left: parent.left
-                        anchors.leftMargin: 20
-                        anchors.bottom: parent.bottom
-                        anchors.bottomMargin: 8
-                        text: parent.section
-                        color: Theme.textMute
-                        font.pixelSize: 11
-                        font.weight: Font.Bold
-                        font.letterSpacing: 1.2
-                        font.capitalization: Font.AllUppercase
-                    }
+                readonly property bool isVideo: modelData.kind === "video"
+                readonly property var prog: {
+                    var rev = fluxUser ? fluxUser.revision : 0
+                    return (isVideo && fluxUser) ? fluxUser.progressFor(modelData.url) : ({})
                 }
 
-                ScrollBar.vertical: FluxScrollBar { }
-
-                delegate: Item {
-                    id: orow
-
-                    required property var modelData
-
-                    readonly property bool isVideo: modelData.kind === "video"
-                    readonly property var meta: isVideo ? Formatter.describe(modelData.name, false, modelData.detail) : ({})
-                    readonly property var parsed: isVideo ? Formatter.formatMedia(modelData.name, false, modelData.detail) : ({})
-                    // Reading `revision` refreshes the watch badge when history changes
-                    readonly property var prog: {
-                        var rev = fluxUser ? fluxUser.revision : 0
-                        return (isVideo && fluxUser) ? fluxUser.progressFor(modelData.url) : ({})
+                width: libraryGrid.cellWidth
+                height: libraryGrid.cellHeight
+                showDownload: false
+                title: modelData.name || ""
+                parentPath: modelData.path || ""
+                isFolder: !isVideo
+                formattedSize: modelData.detail || ""
+                extension: modelData.extension || ""
+                playUrl: isVideo ? (modelData.url || "") : (modelData.rel || "")
+                localPath: modelData.path || ""
+                libraryName: {
+                    if (root.searching && modelData.folder && modelData.folder.length > 0) {
+                        return modelData.folder.split("/").join(" \u203A ")
                     }
-                    readonly property real fraction: prog.fraction !== undefined ? prog.fraction : 0
-                    readonly property bool watched: prog.watched === true
+                    return modelData.section || ""
+                }
+                isPlaying: (isVideo && !!fluxPlayer && fluxPlayer.url === modelData.url && fluxPlayer.isPlaying)
+                progress: (prog.fraction !== undefined) ? prog.fraction : 0
+                watched: (prog.watched === true)
+                introDelay: (index % 4) * 40
 
-                    readonly property string subtitle: {
-                        if (!isVideo) return modelData.detail
-                        var parts = []
-                        // In search results, say which pack an episode belongs to
-                        if (root.searching && modelData.folder && modelData.folder.length > 0) {
-                            parts.push(modelData.folder.split("/").join(" › "))
-                        }
-                        if (meta.episode && meta.episode.length > 0) parts.push(meta.episode)
-                        if (meta.resolution && meta.resolution.length > 0) parts.push(meta.resolution)
-                        parts.push(modelData.detail)
-                        if (watched) parts.push("Watched")
-                        return parts.join("  ·  ")
-                    }
-
-                    width: ListView.view.width
-                    height: 66
-
-                    Rectangle {
-                        anchors.fill: parent
-                        color: (orowMouse.containsMouse || openFolderBtn.hovered) ? "#14FFFFFF" : "transparent"
-                    }
-
-                    RowLayout {
-                        anchors.fill: parent
-                        anchors.leftMargin: 20
-                        anchors.rightMargin: 12
-                        spacing: 14
-
-                        Rectangle {
-                            implicitWidth: 40
-                            implicitHeight: 40
-                            radius: 10
-                            color: orow.isVideo ? Theme.posterTop(modelData.name) : Theme.surfaceHi
-                            Layout.alignment: Qt.AlignVCenter
-
-                            FluxIcon {
-                                anchors.centerIn: parent
-                                name: orow.isVideo ? "play" : "folder"
-                                size: 18
-                                color: orow.isVideo ? "#FFFFFF" : Theme.textDim
-                            }
-                        }
-
-                        ColumnLayout {
-                            Layout.fillWidth: true
-                            Layout.alignment: Qt.AlignVCenter
-                            spacing: 2
-
-                            Text {
-                                text: orow.isVideo ? orow.parsed.title : modelData.name
-                                color: Theme.text
-                                font.pixelSize: 14
-                                font.weight: Font.DemiBold
-                                elide: Text.ElideMiddle
-                                Layout.fillWidth: true
-                            }
-
-                            Text {
-                                text: orow.subtitle
-                                color: Theme.textDim
-                                font.pixelSize: 12
-                                elide: Text.ElideRight
-                                Layout.fillWidth: true
-                            }
-
-                            // Watch progress
-                            Rectangle {
-                                visible: orow.fraction > 0 && !orow.watched
-                                Layout.fillWidth: true
-                                implicitHeight: 3
-                                radius: 1.5
-                                color: "#2EFFFFFF"
-
-                                Rectangle {
-                                    width: parent.width * Math.max(0, Math.min(1, orow.fraction))
-                                    height: parent.height
-                                    radius: 1.5
-                                    color: Theme.accent
-                                }
-                            }
-                        }
-
-                        IconButton {
-                            id: openFolderBtn
-                            visible: orow.isVideo
-                            iconName: "folder"
-                            iconSize: 15
-                            iconColor: Theme.textDim
-                            implicitWidth: 34
-                            implicitHeight: 34
-                            tip: "Show in folder"
-                            tipAbove: false
-                            Layout.alignment: Qt.AlignVCenter
-                            onClicked: fluxDownloads.openPath(modelData.path)
-                        }
-
-                        FluxIcon {
-                            visible: !orow.isVideo
-                            name: "chevronRight"
-                            size: 16
-                            color: Theme.textMute
-                            Layout.alignment: Qt.AlignVCenter
-                        }
-                    }
-
-                    // Row click. The right edge is left free so the folder button stays clickable.
-                    MouseArea {
-                        id: orowMouse
-                        anchors.fill: parent
-                        anchors.rightMargin: orow.isVideo ? 56 : 0
-                        hoverEnabled: true
-                        cursorShape: Qt.PointingHandCursor
-
-                        onClicked: {
-                            if (orow.isVideo) {
-                                root.playRequested(modelData.url, orow.parsed.title)
-                            } else {
-                                // Open the pack; leave search mode so its contents show
-                                var target = modelData.rel
-                                root.clearSearch()
-                                root.rel = target
-                            }
-                        }
-                    }
-
-                    Rectangle {
-                        anchors.left: parent.left
-                        anchors.right: parent.right
-                        anchors.bottom: parent.bottom
-                        anchors.leftMargin: 20
-                        height: 1
-                        color: Theme.border
-                    }
+                onPlayRequested: function(url, itemTitle) {
+                    root.playRequested(modelData.url, itemTitle)
                 }
 
-                // Empty state
-                ColumnLayout {
-                    anchors.centerIn: parent
-                    width: parent.width - 60
-                    spacing: 8
-                    visible: libraryList.count === 0
-
-                    FluxIcon {
-                        name: root.searching ? "search" : "folder"
-                        size: 34
-                        color: Theme.textMute
-                        Layout.alignment: Qt.AlignHCenter
-                    }
-
-                    Text {
-                        text: root.searching ? "No matches in your library"
-                                             : (root.rel.length === 0 ? "Nothing downloaded yet" : "No videos in this folder")
-                        color: Theme.text
-                        font.pixelSize: 16
-                        font.weight: Font.DemiBold
-                        Layout.alignment: Qt.AlignHCenter
-                    }
-
-                    Text {
-                        text: root.searching ? "Try fewer or different words."
-                                             : "Downloaded movies and series show up here and play without an internet connection."
-                        color: Theme.textMute
-                        font.pixelSize: 13
-                        horizontalAlignment: Text.AlignHCenter
-                        wrapMode: Text.Wrap
-                        Layout.fillWidth: true
-                    }
+                onFolderRequested: function(url, libName) {
+                    var target = modelData.rel
+                    root.clearSearch()
+                    root.rel = target
                 }
             }
         }

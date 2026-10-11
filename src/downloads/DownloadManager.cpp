@@ -128,6 +128,7 @@ QVariantMap videoEntry(const QFileInfo &fi, const QString &root) {
     m["rel"] = QDir(root).relativeFilePath(fi.absoluteFilePath());
     m["path"] = native(fi.absoluteFilePath());
     m["url"] = QString::fromLatin1(QUrl::fromLocalFile(fi.absoluteFilePath()).toEncoded());
+    m["extension"] = fi.suffix().toUpper();
     m["sizeBytes"] = fi.size();
     m["detail"] = SearchResult::formatBytes(fi.size());
     return m;
@@ -504,7 +505,8 @@ QVariantList DownloadManager::offlineList(const QString &relPath) const {
     while (rel.endsWith('/')) rel.chop(1);
     if (rel.split('/', Qt::SkipEmptyParts).contains(QStringLiteral(".."))) return out;
 
-    // Top level: the actual series/pack folders first, then the individual movies.
+    // Top level: all folders first (Series/packs, any subfolders, and added target folders),
+    // then the individual movies / episodes.
     // (The "Series" and "Individuals" container folders themselves are not shown, and the
     // episodes inside the pack folders are not listed here.)
     if (rel.isEmpty()) {
@@ -526,6 +528,37 @@ QVariantList DownloadManager::offlineList(const QString &relPath) const {
             out.append(m);
         }
 
+        QFileInfoList indDirs = QDir(m_root + QStringLiteral("/Individuals"))
+                                    .entryInfoList(QDir::Dirs | QDir::NoDotAndDotDot, QDir::NoSort);
+        std::sort(indDirs.begin(), indDirs.end(), topByName);
+        for (const QFileInfo &fi : indDirs) {
+            const int n = countVideos(fi.absoluteFilePath());
+            if (n == 0) continue;
+            QVariantMap m = folderEntry(fi, m_root, n);
+            m["section"] = QStringLiteral("TV Series & Packs");
+            out.append(m);
+        }
+
+        // Extra folders the user added in Settings (listed with folders before movies/episodes)
+        for (const QString &t : m_targets) {
+            const QFileInfo fi(t);
+            QVariantMap m;
+            m["name"] = fi.fileName().isEmpty() ? native(t) : fi.fileName();
+            m["kind"] = QStringLiteral("folder");
+            m["rel"] = QStringLiteral("@") + t;
+            m["path"] = native(t);
+            if (QDir(t).exists()) {
+                bool truncated = false;
+                const int n = countVideosIn(t, m_root, truncated);
+                m["count"] = n;
+                m["detail"] = (n > 0 && !truncated) ? videoCountText(n) : native(t);
+            } else {
+                m["detail"] = QStringLiteral("Not available \u00B7 ") + native(t);
+            }
+            m["section"] = QStringLiteral("Added folders");
+            out.append(m);
+        }
+
         QFileInfoList movies = QDir(m_root + QStringLiteral("/Individuals"))
                                    .entryInfoList(QDir::Files, QDir::NoSort);
         movies.erase(std::remove_if(movies.begin(), movies.end(),
@@ -535,19 +568,6 @@ QVariantList DownloadManager::offlineList(const QString &relPath) const {
         for (const QFileInfo &fi : movies) {
             QVariantMap m = videoEntry(fi, m_root);
             m["section"] = QStringLiteral("Movies");
-            out.append(m);
-        }
-
-        // Extra folders the user added in Settings (one entry each, opened like a pack)
-        for (const QString &t : m_targets) {
-            const QFileInfo fi(t);
-            QVariantMap m;
-            m["name"] = fi.fileName().isEmpty() ? native(t) : fi.fileName();
-            m["kind"] = QStringLiteral("folder");
-            m["rel"] = QStringLiteral("@") + t;
-            m["path"] = native(t);
-            m["detail"] = QDir(t).exists() ? native(t) : QStringLiteral("Not available \u00B7 ") + native(t);
-            m["section"] = QStringLiteral("Added folders");
             out.append(m);
         }
         return out;
@@ -592,6 +612,7 @@ QVariantList DownloadManager::offlineList(const QString &relPath) const {
         m["rel"] = rel + QLatin1Char('/') + fi.fileName();
         m["path"] = native(fi.absoluteFilePath());
         m["url"] = QString::fromLatin1(QUrl::fromLocalFile(fi.absoluteFilePath()).toEncoded());
+        m["extension"] = fi.suffix().toUpper();
         m["sizeBytes"] = fi.size();
         m["detail"] = SearchResult::formatBytes(fi.size());
         out.append(m);
@@ -772,9 +793,11 @@ QVariantList DownloadManager::offlineSearch(const QString &query) const {
     collator.setNumericMode(true);
     collator.setCaseSensitivity(Qt::CaseInsensitive);
 
-    // Pack folders whose name matches
+    // 1. Folders whose name matches (Series packs, Individuals subfolders, and folders in added targets)
     QFileInfoList packs = QDir(m_root + QStringLiteral("/Series"))
                               .entryInfoList(QDir::Dirs | QDir::NoDotAndDotDot, QDir::NoSort);
+    packs.append(QDir(m_root + QStringLiteral("/Individuals"))
+                     .entryInfoList(QDir::Dirs | QDir::NoDotAndDotDot, QDir::NoSort));
     std::sort(packs.begin(), packs.end(), [&collator](const QFileInfo &a, const QFileInfo &b) {
         return collator.compare(a.fileName(), b.fileName()) < 0;
     });
@@ -787,7 +810,33 @@ QVariantList DownloadManager::offlineSearch(const QString &query) const {
         out.append(m);
     }
 
-    // Videos anywhere in the library (including episodes inside packs)
+    for (const QString &t : m_targets) {
+        const QDir tdir(t);
+        if (!tdir.exists()) continue;
+        QFileInfoList tdirs = tdir.entryInfoList(QDir::Dirs | QDir::NoDotAndDotDot | QDir::Readable, QDir::NoSort);
+        std::sort(tdirs.begin(), tdirs.end(), [&collator](const QFileInfo &a, const QFileInfo &b) {
+            return collator.compare(a.fileName(), b.fileName()) < 0;
+        });
+        for (const QFileInfo &fi : tdirs) {
+            const QString fp = QDir::cleanPath(fi.absoluteFilePath());
+            if (samePath(fp, m_root) || isInside(fp, m_root)) continue;
+            if (!matches(fi.fileName())) continue;
+            bool truncated = false;
+            const int n = countVideosIn(fp, m_root, truncated);
+            if (n == 0 && !truncated) continue;
+            QVariantMap m;
+            m["name"] = fi.fileName();
+            m["kind"] = QStringLiteral("folder");
+            m["rel"] = QStringLiteral("@") + fp;
+            m["path"] = native(fp);
+            m["count"] = n;
+            m["detail"] = n > 0 ? videoCountText(n) : QStringLiteral("Folder");
+            m["section"] = QStringLiteral("Results");
+            out.append(m);
+        }
+    }
+
+    // 2. Videos anywhere in the library (including episodes inside packs and individual movies)
     QFileInfoList hits;
     QDirIterator it(m_root, QDir::Files | QDir::NoDotAndDotDot, QDirIterator::Subdirectories);
     while (it.hasNext() && hits.size() < kMaxSearchResults) {

@@ -16,6 +16,7 @@ Item {
     property string formattedSize: ""
     property string extension: ""
     property string playUrl: ""
+    property string localPath: ""
     property string libraryName: ""
     property bool isPlaying: false
 
@@ -62,7 +63,7 @@ Item {
     }
 
     readonly property string infoLine: {
-        if (root.isFolder) return "Folder"
+        if (root.isFolder) return (root.formattedSize.length > 0 && root.formattedSize !== "Folder") ? root.formattedSize : "Folder"
         var parts = []
         if (root.extraInfo.length > 0) parts.push(root.extraInfo)
         if (root.meta.episode.length > 0) parts.push(root.meta.episode)
@@ -482,11 +483,18 @@ Item {
         sourceComponent: CardMenu {
             isFolder: root.isFolder
             bookmarked: root.bookmarked
-            canDownload: root.playUrl.length > 0
+            canBookmark: root.localPath.length === 0 || !root.isFolder
+            canDownload: root.localPath.length === 0 && root.playUrl.length > 0
+            canShowInFolder: root.localPath.length > 0
 
             onOpenRequested: root.activate()
             onBookmarkToggled: root.toggleBookmark()
             onDownloadRequested: root.requestDownload()
+            onShowInFolderRequested: {
+                if (fluxDownloads && root.localPath.length > 0) {
+                    fluxDownloads.openPath(root.localPath)
+                }
+            }
         }
     }
 

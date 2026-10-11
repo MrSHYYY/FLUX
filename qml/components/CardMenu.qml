@@ -8,11 +8,14 @@ Menu {
 
     property bool isFolder: false
     property bool bookmarked: false
+    property bool canBookmark: true
     property bool canDownload: true
+    property bool canShowInFolder: false
 
     signal openRequested()
     signal bookmarkToggled()
     signal downloadRequested()
+    signal showInFolderRequested()
 
     padding: 6
     modal: false
@@ -32,7 +35,8 @@ Menu {
         property color tint: Theme.text
 
         implicitWidth: 224
-        implicitHeight: 40
+        implicitHeight: visible ? 40 : 0
+        height: visible ? 40 : 0
         leftPadding: 12
         rightPadding: 12
 
@@ -65,12 +69,20 @@ Menu {
     }
 
     Entry {
+        visible: menu.canBookmark
         text: menu.bookmarked ? "Remove bookmark" : "Bookmark"
         tint: menu.bookmarked ? Theme.danger : Theme.text
         onTriggered: menu.bookmarkToggled()
     }
 
     Entry {
+        visible: menu.canShowInFolder
+        text: "Show in folder"
+        onTriggered: menu.showInFolderRequested()
+    }
+
+    Entry {
+        visible: menu.canDownload
         text: menu.isFolder ? "Download folder" : "Download"
         enabled: menu.canDownload
         onTriggered: menu.downloadRequested()
