@@ -1,25 +1,26 @@
 #pragma once
 
 #include <QHash>
+#include <QJsonObject>
 #include <QObject>
 #include <QString>
 #include <QTimer>
 #include <QVariantMap>
 
-#include "MqttClient.h"
+#include "SyncplayClient.h"
 
 namespace Flux {
 
-// Teleparty: a "room" identified by a 5-digit code, shared through the configured EMQX Cloud MQTT broker.
-// Every member publishes to, and listens on, the same room topic over TLS.
+// Teleparty: a "room" identified by a 5-digit code, shared through the public Syncplay server
+// (syncplay.pl:8995) over StartTLS + TLS using FLUX|-prefixed chat relay messages.
 //
-// Wire format (JSON on the room topic):
-//   {"v":1, "t":"hello|presence|bye|event", "from":"<memberId>", "e":"<eventType>", "d":{...}}
+// Wire format (compact JSON after "FLUX|" prefix, automatically chunked if > MaxChat 150 chars):
+//   {"v":1, "t":"hello|presence|bye|event", "f":"<memberId>", "i":<seq>, "e":"<eventType>", "d":{...}}
 //
 //   hello     a new (or reconnected) member announces itself; everyone answers with "presence"
 //   presence  "I'm here"; also sent every few seconds as a heartbeat
-//   bye       a member left (also published by the broker if a member's connection dies)
-//   event     application data (open video, play, pause, seek...) - used by the sync layer
+//   bye       a member left cleanly (abrupt disconnects are also signaled by Syncplay's Set.user.left)
+//   event     application data (open video, play, pause, seek, state, syncme) - used by the sync layer
 //
 // State is exposed to QML as fluxTeleparty.
 class TelepartySession : public QObject {
@@ -61,6 +62,9 @@ public:
     // Send an application event to every other member (only while joined)
     Q_INVOKABLE bool sendEvent(const QString &type, const QVariantMap &data = QVariantMap());
 
+    // Deterministic mapping from 5-digit room code to Syncplay room name
+    static QString roomNameForCode(const QString &code);
+
 signals:
     void stateChanged();
     void codeChanged();
@@ -81,21 +85,25 @@ private:
 
     void startSession();
     void becomeJoined();
+    void handleHostCollision();
     void fail(const QString &message);
     void resetConnection();
     void setState(State s);
     void setError(const QString &message);
 
-    void onMqttConnected();
-    void onMqttDisconnected();
-    void onSubscribed(const QString &topic);
-    void onMessage(const QString &topic, const QByteArray &payload);
+    void onJoinedRoom(const QString &room, const QString &username, int maxChatLength);
+    void onDisconnected();
+    void onFluxMessage(const QString &senderUsername, const QJsonObject &payload);
+    void onPeerPresent(const QString &username);
+    void onPeerLeft(const QString &username);
     void onDiscoveryTimeout();
     void onHeartbeat();
 
-    QByteArray makeMessage(const QString &type, const QString &eventType = QString(),
-                           const QVariantMap &data = QVariantMap()) const;
-    void publishMessage(const QByteArray &message);
+    QJsonObject makeMessage(const QString &type, const QString &eventType = QString(),
+                            const QVariantMap &data = QVariantMap());
+    void publishMessage(const QJsonObject &message);
+
+    static bool isRecognizedEventType(const QString &eventType);
 
     // Returns true when the member was not known before
     bool touchMember(const QString &id);
@@ -103,20 +111,21 @@ private:
     void pruneMembers();
 
     static QString generateCode();
-    static QString roomTopic(const QString &code);
 
-    MqttClient *m_mqtt = nullptr;
+    SyncplayClient *m_client = nullptr;
     QTimer m_discoverTimer;    // waits for someone to answer our hello
     QTimer m_heartbeatTimer;
 
     State m_state = State::Idle;
     QString m_code;
-    QString m_topic;
+    QString m_room;
     QString m_memberId;
     bool m_isHost = false;
     bool m_helloSent = false;
-    int m_attemptsLeft = 0;           // free-code retries when hosting
-    QHash<QString, qint64> m_members; // other members -> last time we heard from them (ms)
+    int m_attemptsLeft = 0;                 // free-code retries when hosting
+    qint64 m_nextEventId = 0;
+    QHash<QString, qint64> m_members;       // other members -> last time we heard from them (ms)
+    QHash<QString, qint64> m_lastEventId;   // other members -> last processed event sequence number
     QString m_errorText;
 };
 

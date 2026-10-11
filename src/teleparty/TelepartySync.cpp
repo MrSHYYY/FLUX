@@ -20,6 +20,30 @@ constexpr qint64 kPlayDriftMs = 800;       // playing: ignore drift smaller than
 constexpr qint64 kPauseDriftMs = 400;      // paused: everybody should show the same frame
 constexpr qint64 kCatchUpDriftMs = 800;
 
+struct BuiltinCatalogEntry {
+    const char *id;
+    const char *title;
+    const char *url;
+};
+
+constexpr BuiltinCatalogEntry kBuiltinCatalog[] = {
+    {
+        "ant-man",
+        "Ant-Man and the Wasp: Quantumania",
+        "http://172.16.50.14/DHAKA-FLIX-14/English%20Movies%20%281080p%29/%282023%29%201080p/Ant-Man%20and%20the%20Wasp-Quantumania%20%282023%29%201080p%20DSNP/Ant-Man%20and%20the%20Wasp%20Quantumania%20%282023%29%201080p%20DSNP-WEB%20x265%20HEVC%2010bit%20AAC%205.1%20MSubs-PSA.mkv"
+    },
+    {
+        "civil-war",
+        "Civil War",
+        "http://172.16.50.14/DHAKA-FLIX-14/English%20Movies%20%281080p%29/%282024%29%201080p/Civil%20War%20%282024%29%201080p%20%5BDual%20Audio%5D/Civil%20War%20%282024%29%201080p%20BluRay%20x265%20HEVC%20ESub%20%5BDual%20Audio%5D%5BHindi%205.1%2BEnglish%205.1%5D%20-mkvC.mkv"
+    },
+    {
+        "kingdom-s1e1",
+        "Kingdom S1E1",
+        "http://172.16.50.14/DHAKA-FLIX-14/KOREAN%20TV%20%26%20WEB%20Series/Kingdom%20%28TV%20Series%202019%E2%80%93%20%29%201080p%20%5BDual%20Audio%5D/Season%201/Kingdom%20S01E01%20%201080p%20NF%20WEBRip%20x265%20HEVC%20MSubs%20%5BDual%20Audio%5D%5BEnglish%205.1%2BKorean%205.1%5D%20-OlaM.mkv"
+    }
+};
+
 qint64 nowMs() {
     return QDateTime::currentMSecsSinceEpoch();
 }
@@ -31,12 +55,49 @@ qint64 cleanTime(const QVariant &v) {
     return std::clamp<qint64>(t, 0, kMaxMs);
 }
 
+bool hasUnsafeCharactersOrTraversal(const QString &str) {
+    if (str.contains(QLatin1Char('\\'))) return true;
+    for (const QChar &ch : str) {
+        if (ch.unicode() < 0x20 || ch.unicode() == 0x7F) return true;
+    }
+    const QString decoded = QUrl::fromPercentEncoding(str.toUtf8());
+    if (decoded.contains(QLatin1Char('\\'))) return true;
+    const QStringList segments = decoded.split(QLatin1Char('/'), Qt::SkipEmptyParts);
+    for (const QString &seg : segments) {
+        if (seg == QLatin1String(".") || seg == QLatin1String("..")) {
+            return true;
+        }
+    }
+    return false;
+}
+
+bool isBuiltinCatalogId(const QString &id) {
+    for (const auto &entry : kBuiltinCatalog) {
+        if (id == QLatin1String(entry.id)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+QString deriveTitleFromPath(const QString &relPath) {
+    const QString decoded = QUrl::fromPercentEncoding(relPath.toUtf8());
+    const int slash = decoded.lastIndexOf(QLatin1Char('/'));
+    QString name = (slash >= 0) ? decoded.mid(slash + 1) : decoded;
+    const int dot = name.lastIndexOf(QLatin1Char('.'));
+    if (dot > 0) {
+        name = name.left(dot);
+    }
+    return name.trimmed();
+}
+
 } // namespace
 
 TelepartySync::TelepartySync(TelepartySession *session, VLCPlayer *player, QObject *parent)
     : QObject(parent)
     , m_session(session)
-    , m_player(player) {
+    , m_player(player)
+    , m_catalog(this) {
 
     m_stateTimer.setSingleShot(true);
     connect(&m_stateTimer, &QTimer::timeout, this, [this]() { m_needState = false; });
@@ -46,25 +107,178 @@ TelepartySync::TelepartySync(TelepartySession *session, VLCPlayer *player, QObje
     connect(&m_seekTimer, &QTimer::timeout, this, &TelepartySync::flushSeek);
 
     // Session -> player
-    connect(m_session, &TelepartySession::eventReceived, this, &TelepartySync::onEvent);
-    connect(m_session, &TelepartySession::stateChanged, this, &TelepartySync::onSessionStateChanged);
-    connect(m_session, &TelepartySession::memberJoined, this, [this](const QString &) {
-        // Someone (re)joined: tell them what we are watching
-        sendState();
-    });
-    connect(m_session, &TelepartySession::joinedSession, this, [this]() {
-        resetParty();
-        // A newcomer learns what the party is watching from the members' answers
-        if (!m_session->isHost()) {
-            armNeedState();
-            m_session->sendEvent(QStringLiteral("syncme"));
-        }
-    });
+    if (m_session) {
+        connect(m_session, &TelepartySession::eventReceived, this, &TelepartySync::onEvent);
+        connect(m_session, &TelepartySession::stateChanged, this, &TelepartySync::onSessionStateChanged);
+        connect(m_session, &TelepartySession::memberJoined, this, [this](const QString &) {
+            // Someone (re)joined: tell them what we are watching
+            sendState();
+        });
+        connect(m_session, &TelepartySession::joinedSession, this, [this]() {
+            resetParty();
+            // A newcomer learns what the party is watching from the members' answers
+            if (!m_session->isHost()) {
+                armNeedState();
+                m_session->sendEvent(QStringLiteral("syncme"));
+            }
+        });
+    }
 
     // Player -> session
-    connect(m_player, &VLCPlayer::userToggledPlay, this, &TelepartySync::onUserToggledPlay);
-    connect(m_player, &VLCPlayer::userSeeked, this, &TelepartySync::onUserSeeked);
-    connect(m_player, &VLCPlayer::stateChanged, this, &TelepartySync::onPlayerStateChanged);
+    if (m_player) {
+        connect(m_player, &VLCPlayer::userToggledPlay, this, &TelepartySync::onUserToggledPlay);
+        connect(m_player, &VLCPlayer::userSeeked, this, &TelepartySync::onUserSeeked);
+        connect(m_player, &VLCPlayer::stateChanged, this, &TelepartySync::onPlayerStateChanged);
+    }
+}
+
+// ============================================================================
+// Catalog validation & compact movie IDs
+// ============================================================================
+
+QString TelepartySync::encodeCatalogMovieId(const QString &url) const {
+    if (url.isEmpty() || url.size() > kMaxUrlLength) return QString();
+    if (hasUnsafeCharactersOrTraversal(url)) return QString();
+
+    const QUrl u(url);
+    const QString scheme = u.scheme().toLower();
+    if (!u.isValid() || (scheme != QLatin1String("http") && scheme != QLatin1String("https")) || u.host().isEmpty()) {
+        return QString();
+    }
+
+    const QString decodedUrl = QUrl::fromPercentEncoding(url.toUtf8());
+
+    // 1. Check built-in catalog items for ultra-short IDs ("ant-man", "civil-war", "kingdom-s1e1")
+    for (const auto &entry : kBuiltinCatalog) {
+        const QString entryUrl = QString::fromLatin1(entry.url);
+        if (url == entryUrl || decodedUrl == QUrl::fromPercentEncoding(entryUrl.toUtf8())) {
+            return QString::fromLatin1(entry.id);
+        }
+    }
+
+    // 2. Match against the 17 official BDIX catalog roots in MediaLibraryModel
+    const MediaRoot *bestRoot = nullptr;
+    QString bestRelPath;
+    int bestRootLen = -1;
+
+    for (const MediaRoot &root : m_catalog.roots()) {
+        QString rootBase = root.url;
+        if (!rootBase.endsWith(QLatin1Char('/'))) {
+            rootBase += QLatin1Char('/');
+        }
+
+        if (url.startsWith(rootBase, Qt::CaseInsensitive)) {
+            const QString rel = url.mid(rootBase.size());
+            if (!rel.isEmpty() && static_cast<int>(rootBase.size()) > bestRootLen) {
+                bestRoot = &root;
+                bestRelPath = rel;
+                bestRootLen = static_cast<int>(rootBase.size());
+            }
+            continue;
+        }
+
+        // Percent-decoded prefix match (handles e.g. "(1080p)" vs "%281080p%29" in server responses)
+        const QString decodedRoot = QUrl::fromPercentEncoding(rootBase.toUtf8());
+        if (decodedUrl.startsWith(decodedRoot, Qt::CaseInsensitive)) {
+            const int slashCount = static_cast<int>(rootBase.count(QLatin1Char('/')));
+            int slashesSeen = 0;
+            int cutPos = -1;
+            for (int i = 0; i < url.size(); ++i) {
+                if (url.at(i) == QLatin1Char('/')) {
+                    if (++slashesSeen == slashCount) {
+                        cutPos = i + 1;
+                        break;
+                    }
+                }
+            }
+            if (cutPos > 0 && cutPos < url.size()) {
+                const QString rel = url.mid(cutPos);
+                if (!rel.isEmpty() && static_cast<int>(decodedRoot.size()) > bestRootLen) {
+                    bestRoot = &root;
+                    bestRelPath = rel;
+                    bestRootLen = static_cast<int>(decodedRoot.size());
+                }
+            }
+        }
+    }
+
+    if (!bestRoot || bestRelPath.isEmpty()) {
+        return QString();
+    }
+
+    return bestRoot->id + QLatin1Char(':') + bestRelPath;
+}
+
+bool TelepartySync::resolveCatalogMovie(const QVariantMap &data, QString &outUrl, QString &outTitle) const {
+    QString id = data.value(QStringLiteral("id")).toString().trimmed();
+    QString providedTitle = data.value(QStringLiteral("n")).toString().trimmed();
+    if (providedTitle.isEmpty()) {
+        providedTitle = data.value(QStringLiteral("title")).toString().trimmed();
+    }
+
+    if (id.isEmpty()) {
+        const QString rawUrl = data.value(QStringLiteral("url")).toString().trimmed();
+        if (!rawUrl.isEmpty()) {
+            id = encodeCatalogMovieId(rawUrl);
+        }
+    }
+
+    if (id.isEmpty() || id.size() > kMaxUrlLength) {
+        return false;
+    }
+
+    // 1. Check built-in short movie IDs
+    for (const auto &entry : kBuiltinCatalog) {
+        if (id == QLatin1String(entry.id)) {
+            outUrl = QString::fromLatin1(entry.url);
+            outTitle = (providedTitle.isEmpty() ? QString::fromLatin1(entry.title) : providedTitle)
+                           .left(kMaxTitleLength);
+            return true;
+        }
+    }
+
+    // 2. Validate "<rootId>:<relativePath>" against MediaLibraryModel
+    const int colon = id.indexOf(QLatin1Char(':'));
+    if (colon <= 0 || colon >= id.size() - 1) {
+        return false;
+    }
+
+    const QString rootId = id.left(colon).trimmed();
+    const QString relPath = id.mid(colon + 1).trimmed();
+
+    const MediaRoot *root = m_catalog.findById(rootId);
+    if (!root) {
+        return false;
+    }
+
+    if (relPath.isEmpty() ||
+        relPath.startsWith(QLatin1Char('/')) ||
+        relPath.contains(QLatin1Char('?')) ||
+        relPath.contains(QLatin1Char('#')) ||
+        hasUnsafeCharactersOrTraversal(relPath)) {
+        return false;
+    }
+
+    const QString decodedRel = QUrl::fromPercentEncoding(relPath.toUtf8());
+    if (decodedRel.contains(QLatin1Char(':'))) {
+        return false; // reject embedded drive letters or schemes
+    }
+
+    QString rootBase = root->url;
+    if (!rootBase.endsWith(QLatin1Char('/'))) {
+        rootBase += QLatin1Char('/');
+    }
+
+    const QString fullUrl = rootBase + relPath;
+    const QUrl parsed(fullUrl);
+    if (!parsed.isValid() || parsed.host().isEmpty()) {
+        return false;
+    }
+
+    outUrl = fullUrl;
+    const QString fallbackTitle = deriveTitleFromPath(relPath);
+    outTitle = (providedTitle.isEmpty() ? fallbackTitle : providedTitle).left(kMaxTitleLength);
+    return true;
 }
 
 // ============================================================================
@@ -77,22 +291,21 @@ void TelepartySync::setWatching(bool watching) {
     emit watchingChanged();
 
     // Coming back to a video the party is on (e.g. via "Now Playing"): catch up with it
-    if (watching && m_session->active() && !m_currentUrl.isEmpty() && m_player->url() == m_currentUrl) {
+    if (watching && m_session && m_session->active() && !m_currentUrl.isEmpty()
+        && m_player && m_player->url() == m_currentUrl) {
         armNeedState();
         m_session->sendEvent(QStringLiteral("syncme"));
     }
 }
 
 bool TelepartySync::isStreamUrl(const QString &url) const {
-    if (url.isEmpty() || url.size() > kMaxUrlLength) return false;
-    const QUrl u(url);
-    const QString scheme = u.scheme().toLower();
-    return u.isValid() && (scheme == QLatin1String("http") || scheme == QLatin1String("https"))
-           && !u.host().isEmpty();
+    return !encodeCatalogMovieId(url).isEmpty();
 }
 
 void TelepartySync::broadcastOpen(const QString &url, const QString &title) {
-    if (!m_session->active() || !isStreamUrl(url)) return;
+    if (!m_session || !m_session->active()) return;
+    const QString movieId = encodeCatalogMovieId(url);
+    if (movieId.isEmpty()) return;
 
     flushSeek();
     noteOpen(url, title.left(kMaxTitleLength));
@@ -101,24 +314,26 @@ void TelepartySync::broadcastOpen(const QString &url, const QString &title) {
     m_stateTimer.stop();
 
     QVariantMap d;
-    d.insert(QStringLiteral("url"), url);
-    d.insert(QStringLiteral("title"), m_currentTitle);
+    d.insert(QStringLiteral("id"), movieId);
+    if (!isBuiltinCatalogId(movieId) && !m_currentTitle.isEmpty()) {
+        d.insert(QStringLiteral("n"), m_currentTitle);
+    }
     m_session->sendEvent(QStringLiteral("open"), d);
 }
 
 void TelepartySync::adoptCurrent(const QString &url, const QString &title) {
-    if (!m_session->active() || !isStreamUrl(url)) return;
+    if (!m_session || !m_session->active() || !isStreamUrl(url)) return;
     m_currentUrl = url;
     m_currentTitle = title.left(kMaxTitleLength);
-    m_partyTimeMs = m_player->timeMs();
-    m_partyDurationMs = m_player->durationMs();
+    m_partyTimeMs = m_player ? m_player->timeMs() : 0;
+    m_partyDurationMs = m_player ? m_player->durationMs() : 0;
     m_partyPlaying = playerRunning();
     m_partyClock.start();
     emit currentMediaChanged();
 }
 
 void TelepartySync::joinPartyPlayback() {
-    if (!m_session->active() || m_currentUrl.isEmpty()) return;
+    if (!m_session || !m_session->active() || m_currentUrl.isEmpty()) return;
 
     const qint64 startMs = partyTimeMs();
     m_pendingSync = true;
@@ -139,8 +354,8 @@ void TelepartySync::joinPartyPlayback() {
 // ============================================================================
 
 void TelepartySync::onUserToggledPlay(bool playing, qint64 timeMs) {
-    if (!m_session->active()) return;
-    if (m_currentUrl.isEmpty() && isStreamUrl(m_player->url())) {
+    if (!m_session || !m_session->active()) return;
+    if (m_currentUrl.isEmpty() && m_player && isStreamUrl(m_player->url())) {
         m_currentUrl = m_player->url();
         emit currentMediaChanged();
     }
@@ -150,15 +365,15 @@ void TelepartySync::onUserToggledPlay(bool playing, qint64 timeMs) {
     m_partyPlaying = playing;
     m_partyClock.start();
 
-    flushSeek();   // keep the order the user performed things in
+    flushSeek(); // keep the order the user performed things in
     QVariantMap d;
     d.insert(QStringLiteral("t"), m_partyTimeMs);
     m_session->sendEvent(playing ? QStringLiteral("play") : QStringLiteral("pause"), d);
 }
 
 void TelepartySync::onUserSeeked(qint64 timeMs) {
-    if (!m_session->active()) return;
-    if (m_currentUrl.isEmpty() && isStreamUrl(m_player->url())) {
+    if (!m_session || !m_session->active()) return;
+    if (m_currentUrl.isEmpty() && m_player && isStreamUrl(m_player->url())) {
         m_currentUrl = m_player->url();
         emit currentMediaChanged();
     }
@@ -177,30 +392,35 @@ void TelepartySync::flushSeek() {
     if (!m_hasPendingSeek) return;
     m_hasPendingSeek = false;
 
-    if (!m_session->active() || m_currentUrl.isEmpty()) return;
+    if (!m_session || !m_session->active() || m_currentUrl.isEmpty()) return;
     QVariantMap d;
     d.insert(QStringLiteral("t"), m_pendingSeekMs);
     m_session->sendEvent(QStringLiteral("seek"), d);
 }
 
 void TelepartySync::sendState() {
-    if (!m_session->active()) return;
+    if (!m_session || !m_session->active() || !m_player) return;
     if (m_currentUrl.isEmpty() && isStreamUrl(m_player->url())
         && m_player->state() != QLatin1String("Idle") && m_player->state() != QLatin1String("Stopped")) {
         m_currentUrl = m_player->url();
         emit currentMediaChanged();
     }
     if (m_currentUrl.isEmpty()) return;
-    if (m_needState || m_player->url() != m_currentUrl) return;   // not in a position to answer
+    if (m_needState || m_player->url() != m_currentUrl) return; // not in a position to answer
     const QString st = m_player->state();
     if (st == QLatin1String("Opening") || st == QLatin1String("Idle") || st == QLatin1String("Stopped")) return;
 
+    const QString movieId = encodeCatalogMovieId(m_currentUrl);
+    if (movieId.isEmpty()) return;
+
     QVariantMap d;
-    d.insert(QStringLiteral("url"), m_currentUrl);
-    d.insert(QStringLiteral("title"), m_currentTitle);
+    d.insert(QStringLiteral("id"), movieId);
+    if (!isBuiltinCatalogId(movieId) && !m_currentTitle.isEmpty()) {
+        d.insert(QStringLiteral("n"), m_currentTitle);
+    }
     d.insert(QStringLiteral("t"), m_player->timeMs());
     d.insert(QStringLiteral("d"), m_player->durationMs());
-    d.insert(QStringLiteral("playing"), playerRunning());
+    d.insert(QStringLiteral("p"), playerRunning() ? 1 : 0);
     m_session->sendEvent(QStringLiteral("state"), d);
 }
 
@@ -228,7 +448,7 @@ void TelepartySync::onEvent(const QString &type, const QVariantMap &data, const 
 
         // Not on the player page (or not loaded on the party video yet): keep tracking the
         // party's timestamp so clicking Continue Watching / Now Playing starts right there.
-        if (!m_watching || m_currentUrl.isEmpty() || m_player->url() != m_currentUrl) return;
+        if (!m_watching || m_currentUrl.isEmpty() || !m_player || m_player->url() != m_currentUrl) return;
 
         if (type == QLatin1String("play")) {
             align(t, true, QStringLiteral("Resumed by a member"));
@@ -241,13 +461,16 @@ void TelepartySync::onEvent(const QString &type, const QVariantMap &data, const 
 }
 
 void TelepartySync::handleOpen(const QVariantMap &data) {
-    const QString url = data.value(QStringLiteral("url")).toString();
-    if (!isStreamUrl(url)) return;   // only streams can be shared (and nothing else is ever opened)
+    QString url;
+    QString title;
+    if (!resolveCatalogMovie(data, url, title)) {
+        FLUX_LOG_WARN("Teleparty", "Rejected remote 'open' event: movie ID / URL is not in the local catalog");
+        return;
+    }
 
     // Autoplay can make two members open the same next episode at the same moment
     if (url == m_lastOpenUrl && nowMs() - m_lastOpenAt < kOpenDedupeMs) return;
 
-    const QString title = data.value(QStringLiteral("title")).toString().left(kMaxTitleLength);
     noteOpen(url, title);
     m_syncOnPlay = true;
     m_needState = false;
@@ -258,18 +481,23 @@ void TelepartySync::handleOpen(const QVariantMap &data) {
 }
 
 void TelepartySync::handleState(const QVariantMap &data) {
-    if (!m_needState && !m_currentUrl.isEmpty()) return;   // we did not ask (or already have an answer)
+    if (!m_needState && !m_currentUrl.isEmpty()) return; // we did not ask (or already have an answer)
 
-    const QString url = data.value(QStringLiteral("url")).toString();
-    if (!isStreamUrl(url)) return;
+    QString url;
+    QString title;
+    if (!resolveCatalogMovie(data, url, title)) {
+        FLUX_LOG_WARN("Teleparty", "Rejected remote 'state' event: movie ID / URL is not in the local catalog");
+        return;
+    }
 
     m_needState = false;
     m_stateTimer.stop();
 
-    const QString title = data.value(QStringLiteral("title")).toString().left(kMaxTitleLength);
     const qint64 t = cleanTime(data.value(QStringLiteral("t")));
     const qint64 dur = cleanTime(data.value(QStringLiteral("d")));
-    const bool playing = data.value(QStringLiteral("playing"), true).toBool();
+    const bool playing = data.contains(QStringLiteral("p"))
+                             ? (data.value(QStringLiteral("p")).toInt() != 0)
+                             : data.value(QStringLiteral("playing"), true).toBool();
 
     const bool changed = (m_currentUrl != url || m_currentTitle != title);
     m_currentUrl = url;
@@ -283,7 +511,7 @@ void TelepartySync::handleState(const QVariantMap &data) {
     emit partyMediaAvailable(url, title, t, m_partyDurationMs);
 
     // Already on that video on the player page: line up with the others
-    if (m_watching && url == m_player->url()) {
+    if (m_watching && m_player && url == m_player->url()) {
         if (m_player->state() == QLatin1String("Opening") || m_pendingSync) {
             m_pendingSync = true;
             m_pendingTimeMs = t;
@@ -302,6 +530,7 @@ void TelepartySync::handleState(const QVariantMap &data) {
 }
 
 void TelepartySync::align(qint64 timeMs, bool playing, const QString &note) {
+    if (!m_player) return;
     const QString st = m_player->state();
 
     if (st == QLatin1String("Ended") || st == QLatin1String("Stopped")) {
@@ -318,11 +547,13 @@ void TelepartySync::align(qint64 timeMs, bool playing, const QString &note) {
 }
 
 void TelepartySync::applySeek(qint64 timeMs) {
+    if (!m_player) return;
     m_player->remoteSeekTo(timeMs);
     emit activity(QStringLiteral("Skipped to ") + formatTime(timeMs));
 }
 
 void TelepartySync::onPlayerStateChanged() {
+    if (!m_player) return;
     const QString st = m_player->state();
     if (st == QLatin1String("Error")) {
         m_pendingSync = false;
@@ -339,7 +570,7 @@ void TelepartySync::onPlayerStateChanged() {
     if (m_syncOnPlay) {
         m_syncOnPlay = false;
         armNeedState();
-        m_session->sendEvent(QStringLiteral("syncme"));
+        if (m_session) m_session->sendEvent(QStringLiteral("syncme"));
     }
 
     if (!m_pendingSync) return;
@@ -356,6 +587,7 @@ void TelepartySync::onPlayerStateChanged() {
 // ============================================================================
 
 void TelepartySync::onSessionStateChanged() {
+    if (!m_session) return;
     const QString s = m_session->state();
 
     if (s == QLatin1String("idle")) {
@@ -411,6 +643,7 @@ void TelepartySync::resetParty() {
 }
 
 bool TelepartySync::playerRunning() const {
+    if (!m_player) return false;
     const QString st = m_player->state();
     return st == QLatin1String("Playing") || st == QLatin1String("Opening") || st.startsWith(QLatin1String("Buffering"));
 }

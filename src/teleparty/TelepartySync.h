@@ -6,6 +6,8 @@
 #include <QTimer>
 #include <QVariantMap>
 
+#include "../search/MediaLibrary.h"
+
 namespace Flux {
 
 class TelepartySession;
@@ -13,18 +15,19 @@ class VLCPlayer;
 
 // Keeps every member's player in step.
 //
-// Local user actions (open a video, play / pause, seek) are sent to the room as events;
-// events from other members are applied to the local player without being sent back.
+// Local user actions (open a video, play / pause, seek) are sent to the room as compact events;
+// events from other members are validated against the local catalog and applied to the local
+// player without being sent back.
 //
 // Events (all carried by TelepartySession::sendEvent):
-//   open    {url, title}          somebody opened a video: everyone opens it from the start
-//   play    {t}                   resume at position t (ms)
-//   pause   {t}                   pause at position t
-//   seek    {t}                   jump to position t
-//   state   {url, title, t, playing}   "this is what I am watching": answers a newcomer
-//   syncme  {}                    "tell me what you are watching" (member returning to the player)
+//   open    {id, n?}                 somebody opened a catalog video: everyone opens it from the start
+//   play    {t}                      resume at position t (ms)
+//   pause   {t}                      pause at position t
+//   seek    {t}                      jump to position t
+//   state   {id, n?, t, d, p}        "this is what I am watching": answers a newcomer
+//   syncme  {}                       "tell me what you are watching" (member returning to the player)
 //
-// Only http(s) streams are shared; offline files exist on one machine only.
+// Only validated catalog http(s) streams are shared; offline files exist on one machine only.
 class TelepartySync : public QObject {
     Q_OBJECT
 
@@ -44,8 +47,14 @@ public:
     QString currentTitle() const { return m_currentTitle; }
     bool hasPartyMedia() const { return !m_currentUrl.isEmpty(); }
 
-    // True for http(s) URLs: the only kind of media that can be watched together
+    // True for validated catalog http(s) URLs: the only kind of media that can be watched together
     Q_INVOKABLE bool isStreamUrl(const QString &url) const;
+
+    // Encodes a catalog stream URL into a compact movie/catalog ID (empty if not in local catalog)
+    QString encodeCatalogMovieId(const QString &url) const;
+
+    // Resolves and validates a remote event payload ({id, n} or {url, title}) against the local catalog
+    bool resolveCatalogMovie(const QVariantMap &data, QString &outUrl, QString &outTitle) const;
 
     // The local user opened a video: tell everyone to open it too
     Q_INVOKABLE void broadcastOpen(const QString &url, const QString &title);
@@ -95,6 +104,7 @@ private:
 
     TelepartySession *m_session = nullptr;
     VLCPlayer *m_player = nullptr;
+    MediaLibraryModel m_catalog;
 
     bool m_watching = false;
 

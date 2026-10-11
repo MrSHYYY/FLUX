@@ -2,205 +2,36 @@
 #include "../core/Logger.h"
 
 #include <QClipboard>
-#include <QCoreApplication>
 #include <QCryptographicHash>
 #include <QDateTime>
-#include <QDir>
-#include <QFile>
-#include <QFileInfo>
 #include <QGuiApplication>
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QRandomGenerator>
 #include <QRegularExpression>
-#include <QStandardPaths>
+#include <QSet>
 #include <QUuid>
 
 namespace Flux {
 
 namespace {
 
-constexpr quint16 kDefaultBrokerPort = 8883;
 constexpr int kProtocolVersion = 1;
-constexpr int kMaxMessageBytes = 16 * 1024;
 constexpr int kHeartbeatMs = 10000;          // "presence" every 10 s
 constexpr qint64 kMemberTimeoutMs = 32000;   // a member silent this long is dropped
-constexpr int kHostDiscoverMs = 1800;        // hosting: wait this long for a clash with an existing room
-constexpr int kJoinDiscoverMs = 2500;        // joining: wait this long for someone to answer
+constexpr int kHostDiscoverMs = 1200;        // hosting: wait this long for a clash with an existing room
+constexpr int kJoinDiscoverMs = 3500;        // joining: wait this long for someone to answer
 constexpr int kMaxHostAttempts = 5;
 
-struct BrokerConfig {
-    QString host;
-    quint16 port = kDefaultBrokerPort;
-    QString protocol = QStringLiteral("mqtts");
-    QString username;
-    QString password;
-    bool tlsEnabled = true;
-    bool tlsVerify = true;
-    QString sourcePath;
-    QString error;
-    bool isValid() const { return error.isEmpty(); }
-};
-
-QHash<QString, QString> parseDotEnvFile(const QString &filePath) {
-    QHash<QString, QString> map;
-    QFile file(filePath);
-    if (!file.open(QIODevice::ReadOnly | QIODevice::Text)) {
-        return map;
-    }
-
-    while (!file.atEnd()) {
-        QString line = QString::fromUtf8(file.readLine()).trimmed();
-        if (line.isEmpty() || line.startsWith('#')) {
-            continue;
-        }
-        if (line.startsWith(QLatin1String("export "))) {
-            line = line.mid(7).trimmed();
-        }
-        const int eqPos = line.indexOf('=');
-        if (eqPos <= 0) {
-            continue;
-        }
-        const QString key = line.left(eqPos).trimmed();
-        QString val = line.mid(eqPos + 1).trimmed();
-        if (val.size() >= 2 &&
-            ((val.startsWith('"') && val.endsWith('"')) ||
-             (val.startsWith('\'') && val.endsWith('\'')))) {
-            val = val.mid(1, val.size() - 2);
-        }
-        if (!key.isEmpty()) {
-            map.insert(key, val);
-        }
-    }
-    return map;
+QString configuredHost() {
+    const QString env = qEnvironmentVariable("FLUX_SYNCPLAY_HOST").trimmed();
+    return env.isEmpty() ? QString::fromLatin1(SyncplayClient::kDefaultHost) : env;
 }
 
-bool parseBoolFlag(const QString &raw, bool defaultVal, bool *okOut = nullptr) {
-    const QString s = raw.trimmed().toLower();
-    if (s.isEmpty()) {
-        if (okOut) *okOut = true;
-        return defaultVal;
-    }
-    if (s == QLatin1String("true") || s == QLatin1String("1") || s == QLatin1String("yes")) {
-        if (okOut) *okOut = true;
-        return true;
-    }
-    if (s == QLatin1String("false") || s == QLatin1String("0") || s == QLatin1String("no")) {
-        if (okOut) *okOut = true;
-        return false;
-    }
-    if (okOut) *okOut = false;
-    return defaultVal;
-}
-
-BrokerConfig loadBrokerConfig() {
-    BrokerConfig cfg;
-
-    const QString appDir = QCoreApplication::applicationDirPath();
-    const QStringList candidates = {
-        QDir::current().filePath(QStringLiteral(".env")),
-        QDir(appDir).filePath(QStringLiteral(".env")),
-        QDir(appDir).filePath(QStringLiteral("../.env")),
-        QDir(appDir).filePath(QStringLiteral("../../.env")),
-        QDir(appDir).filePath(QStringLiteral("../../../.env")),
-        QDir(QStandardPaths::writableLocation(QStandardPaths::AppConfigLocation)).filePath(QStringLiteral(".env")),
-        QDir(QStandardPaths::writableLocation(QStandardPaths::AppLocalDataLocation)).filePath(QStringLiteral(".env"))
-    };
-
-    QHash<QString, QString> fileVars;
-    for (const QString &candidate : candidates) {
-        const QFileInfo fi(candidate);
-        if (fi.exists() && fi.isFile()) {
-            cfg.sourcePath = fi.canonicalFilePath();
-            fileVars = parseDotEnvFile(cfg.sourcePath);
-            break;
-        }
-    }
-
-    auto getBuildDefault = [](const char *name) -> QString {
-#ifdef FLUX_ENV_MQTT_BROKER_HOST
-        if (qstrcmp(name, "MQTT_BROKER_HOST") == 0) return QStringLiteral(FLUX_ENV_MQTT_BROKER_HOST);
-#endif
-#ifdef FLUX_ENV_MQTT_BROKER_PORT
-        if (qstrcmp(name, "MQTT_BROKER_PORT") == 0) return QStringLiteral(FLUX_ENV_MQTT_BROKER_PORT);
-#endif
-#ifdef FLUX_ENV_MQTT_PROTOCOL
-        if (qstrcmp(name, "MQTT_PROTOCOL") == 0) return QStringLiteral(FLUX_ENV_MQTT_PROTOCOL);
-#endif
-#ifdef FLUX_ENV_MQTT_USERNAME
-        if (qstrcmp(name, "MQTT_USERNAME") == 0) return QStringLiteral(FLUX_ENV_MQTT_USERNAME);
-#endif
-#ifdef FLUX_ENV_MQTT_PASSWORD
-        if (qstrcmp(name, "MQTT_PASSWORD") == 0) return QStringLiteral(FLUX_ENV_MQTT_PASSWORD);
-#endif
-#ifdef FLUX_ENV_MQTT_TLS_ENABLED
-        if (qstrcmp(name, "MQTT_TLS_ENABLED") == 0) return QStringLiteral(FLUX_ENV_MQTT_TLS_ENABLED);
-#endif
-#ifdef FLUX_ENV_MQTT_TLS_VERIFY
-        if (qstrcmp(name, "MQTT_TLS_VERIFY") == 0) return QStringLiteral(FLUX_ENV_MQTT_TLS_VERIFY);
-#endif
-        Q_UNUSED(name);
-        return QString();
-    };
-
-    auto getVar = [&fileVars, &getBuildDefault](const char *name) -> QString {
-        const QString envVal = qEnvironmentVariable(name).trimmed();
-        if (!envVal.isEmpty()) {
-            return envVal;
-        }
-        const QString fileVal = fileVars.value(QString::fromLatin1(name)).trimmed();
-        if (!fileVal.isEmpty()) {
-            return fileVal;
-        }
-        return getBuildDefault(name).trimmed();
-    };
-
-    cfg.host = getVar("MQTT_BROKER_HOST");
-    const QString portStr = getVar("MQTT_BROKER_PORT");
-    if (!portStr.isEmpty()) {
-        bool portOk = false;
-        const uint p = portStr.toUInt(&portOk);
-        if (!portOk || p == 0 || p > 65535) {
-            cfg.error = QStringLiteral("Invalid MQTT_BROKER_PORT in Teleparty configuration.");
-            return cfg;
-        }
-        cfg.port = static_cast<quint16>(p);
-    }
-
-    const QString protoStr = getVar("MQTT_PROTOCOL").toLower();
-    if (!protoStr.isEmpty()) {
-        cfg.protocol = protoStr;
-    }
-    if (cfg.protocol != QLatin1String("mqtts") &&
-        cfg.protocol != QLatin1String("tls") &&
-        cfg.protocol != QLatin1String("ssl")) {
-        cfg.error = QStringLiteral("Unsupported MQTT_PROTOCOL '%1' (expected 'mqtts').").arg(cfg.protocol);
-        return cfg;
-    }
-
-    bool tlsEnabledOk = true;
-    cfg.tlsEnabled = parseBoolFlag(getVar("MQTT_TLS_ENABLED"), true, &tlsEnabledOk);
-    if (!tlsEnabledOk || !cfg.tlsEnabled) {
-        cfg.error = QStringLiteral("Teleparty requires MQTT_TLS_ENABLED=true.");
-        return cfg;
-    }
-
-    bool tlsVerifyOk = true;
-    cfg.tlsVerify = parseBoolFlag(getVar("MQTT_TLS_VERIFY"), true, &tlsVerifyOk);
-    if (!tlsVerifyOk || !cfg.tlsVerify) {
-        cfg.error = QStringLiteral("Teleparty requires MQTT_TLS_VERIFY=true.");
-        return cfg;
-    }
-
-    cfg.username = getVar("MQTT_USERNAME");
-    cfg.password = getVar("MQTT_PASSWORD");
-
-    if (cfg.host.isEmpty() || cfg.username.isEmpty() || cfg.password.isEmpty()) {
-        cfg.error = QStringLiteral("Teleparty is not configured. Missing MQTT broker credentials in .env.");
-        return cfg;
-    }
-
-    return cfg;
+quint16 configuredPort() {
+    bool ok = false;
+    const uint p = qEnvironmentVariable("FLUX_SYNCPLAY_PORT").trimmed().toUInt(&ok);
+    return (ok && p > 0 && p <= 65535) ? static_cast<quint16>(p) : SyncplayClient::kDefaultPort;
 }
 
 qint64 nowMs() {
@@ -211,41 +42,35 @@ qint64 nowMs() {
 
 TelepartySession::TelepartySession(QObject *parent)
     : QObject(parent)
-    , m_mqtt(new MqttClient(this)) {
+    , m_client(new SyncplayClient(this)) {
     m_discoverTimer.setSingleShot(true);
     connect(&m_discoverTimer, &QTimer::timeout, this, &TelepartySession::onDiscoveryTimeout);
 
     m_heartbeatTimer.setInterval(kHeartbeatMs);
     connect(&m_heartbeatTimer, &QTimer::timeout, this, &TelepartySession::onHeartbeat);
 
-    connect(m_mqtt, &MqttClient::connected, this, &TelepartySession::onMqttConnected);
-    connect(m_mqtt, &MqttClient::disconnected, this, &TelepartySession::onMqttDisconnected);
-    connect(m_mqtt, &MqttClient::subscribed, this, &TelepartySession::onSubscribed);
-    connect(m_mqtt, &MqttClient::messageReceived, this, &TelepartySession::onMessage);
-    connect(m_mqtt, &MqttClient::connectionFailed, this, [this](const QString &reason) {
+    connect(m_client, &SyncplayClient::joinedRoom, this, &TelepartySession::onJoinedRoom);
+    connect(m_client, &SyncplayClient::disconnected, this, &TelepartySession::onDisconnected);
+    connect(m_client, &SyncplayClient::fluxMessageReceived, this, &TelepartySession::onFluxMessage);
+    connect(m_client, &SyncplayClient::peerPresent, this, &TelepartySession::onPeerPresent);
+    connect(m_client, &SyncplayClient::peerLeft, this, &TelepartySession::onPeerLeft);
+    connect(m_client, &SyncplayClient::connectionFailed, this, [this](const QString &reason) {
         if (m_state == State::Connecting || m_state == State::Reconnecting) {
-            if (reason.contains(QLatin1String("Authentication failed"), Qt::CaseInsensitive) ||
-                reason.contains(QLatin1String("not authorized"), Qt::CaseInsensitive)) {
-                fail(QStringLiteral("Teleparty authentication failed. Check your MQTT credentials."));
+            if (reason.contains(QLatin1String("TLS"), Qt::CaseInsensitive) ||
+                reason.contains(QLatin1String("certificate"), Qt::CaseInsensitive)) {
+                fail(QStringLiteral("Secure connection to Teleparty server failed."));
             } else if (reason.contains(QLatin1String("timed out"), Qt::CaseInsensitive)) {
-                fail(QStringLiteral("Connection to Teleparty broker timed out."));
+                fail(QStringLiteral("Connection to Teleparty server timed out."));
             } else {
                 fail(QStringLiteral("Couldn't reach the Teleparty service. Check your internet connection."));
             }
         }
     });
 
-    const BrokerConfig cfg = loadBrokerConfig();
-    if (cfg.isValid()) {
-        FLUX_LOG_INFO("Teleparty",
-                      QString("Configured MQTT broker %1:%2 (protocol=%3, tls=true, verify=true, user=%4, source=%5)")
-                          .arg(cfg.host)
-                          .arg(cfg.port)
-                          .arg(cfg.protocol, cfg.username,
-                               cfg.sourcePath.isEmpty() ? QStringLiteral("environment") : cfg.sourcePath));
-    } else {
-        FLUX_LOG_WARN("Teleparty", cfg.error);
-    }
+    FLUX_LOG_INFO("Teleparty",
+                  QString("Configured Syncplay relay %1:%2 (StartTLS + TLS VerifyPeer)")
+                      .arg(configuredHost())
+                      .arg(configuredPort()));
 }
 
 TelepartySession::~TelepartySession() {
@@ -334,7 +159,9 @@ void TelepartySession::leave() {
     if (m_state == State::Idle) return;
 
     const bool wasActive = active();
-    if (m_state == State::Joined) publishMessage(makeMessage(QStringLiteral("bye")));
+    if (m_state == State::Joined) {
+        publishMessage(makeMessage(QStringLiteral("bye")));
+    }
 
     resetConnection();
     m_code.clear();
@@ -347,15 +174,15 @@ void TelepartySession::leave() {
 }
 
 void TelepartySession::startSession() {
-    const BrokerConfig cfg = loadBrokerConfig();
-    if (!cfg.isValid()) {
-        fail(cfg.error);
-        return;
-    }
+    const QString host = configuredHost();
+    const quint16 port = configuredPort();
 
-    m_memberId = QUuid::createUuid().toString(QUuid::WithoutBraces).remove('-').left(10);
-    m_topic = roomTopic(m_code);
+    // 11-char username ("FX_" + 8 hex chars) fits comfortably within Syncplay's 16-char limit
+    m_memberId = QStringLiteral("FX_") +
+                 QUuid::createUuid().toString(QUuid::WithoutBraces).remove('-').left(8);
+    m_room = roomNameForCode(m_code);
     m_members.clear();
+    m_lastEventId.clear();
     m_helloSent = false;
     m_discoverTimer.stop();
     m_heartbeatTimer.stop();
@@ -365,17 +192,12 @@ void TelepartySession::startSession() {
     emit membersChanged();
 
     FLUX_LOG_INFO("Teleparty",
-                  QString("%1 session %2 via %3:%4 (%5)")
-                      .arg(m_isHost ? "Hosting" : "Joining", m_code, cfg.host)
-                      .arg(cfg.port)
-                      .arg(cfg.protocol));
+                  QString("%1 session %2 (room %3) via %4:%5")
+                      .arg(m_isHost ? "Hosting" : "Joining", m_code, m_room, host)
+                      .arg(port));
 
-    m_mqtt->disconnectFromBroker();
-    m_mqtt->setCredentials(cfg.username, cfg.password);
-    // If our connection dies, the broker tells everyone else we are gone
-    m_mqtt->setWill(m_topic, makeMessage(QStringLiteral("bye")));
-    m_mqtt->subscribe(m_topic);
-    m_mqtt->connectToBroker(cfg.host, cfg.port);
+    m_client->disconnectFromServer();
+    m_client->connectToServer(host, port, m_memberId, m_room);
 }
 
 void TelepartySession::becomeJoined() {
@@ -385,6 +207,17 @@ void TelepartySession::becomeJoined() {
     emit membersChanged();
     emit joinedSession();
     FLUX_LOG_INFO("Teleparty", QString("Joined session %1 (%2 members)").arg(m_code).arg(memberCount()));
+}
+
+void TelepartySession::handleHostCollision() {
+    m_discoverTimer.stop();
+    if (--m_attemptsLeft <= 0) {
+        fail(QStringLiteral("Couldn't create a session. Please try again."));
+        return;
+    }
+    m_client->disconnectFromServer();
+    m_code = generateCode();
+    startSession();
 }
 
 void TelepartySession::fail(const QString &message) {
@@ -401,27 +234,29 @@ void TelepartySession::fail(const QString &message) {
 void TelepartySession::resetConnection() {
     m_discoverTimer.stop();
     m_heartbeatTimer.stop();
-    m_mqtt->disconnectFromBroker();
+    m_client->disconnectFromServer();
     m_members.clear();
+    m_lastEventId.clear();
     m_helloSent = false;
-    m_topic.clear();
+    m_room.clear();
 }
 
 // ============================================================================
 // Connection events
 // ============================================================================
 
-void TelepartySession::onMqttConnected() {
-    FLUX_LOG_DEBUG("Teleparty", "Connected to broker");
-    // The room topic was queued with subscribe(); hello goes out once the broker confirms it
-}
+void TelepartySession::onJoinedRoom(const QString &room, const QString &username, int maxChatLength) {
+    if (!username.isEmpty()) {
+        m_memberId = username;
+    }
+    if (!room.isEmpty()) {
+        m_room = room;
+    }
 
-void TelepartySession::onMqttDisconnected() {
-    if (m_state == State::Joined) setState(State::Reconnecting);
-}
-
-void TelepartySession::onSubscribed(const QString &topic) {
-    if (topic != m_topic) return;
+    FLUX_LOG_DEBUG("Teleparty",
+                   QString("Handshake complete as '%1' in room '%2' (MaxChat=%3)")
+                       .arg(m_memberId, m_room)
+                       .arg(maxChatLength));
 
     if (m_state == State::Connecting) {
         publishMessage(makeMessage(QStringLiteral("hello")));
@@ -433,15 +268,37 @@ void TelepartySession::onSubscribed(const QString &topic) {
         }
     } else if (m_state == State::Reconnecting) {
         setState(State::Joined);
-        publishMessage(makeMessage(QStringLiteral("hello")));   // re-announce, learn who is still here
+        publishMessage(makeMessage(QStringLiteral("hello"))); // re-announce, learn who is still here
     }
+}
+
+void TelepartySession::onDisconnected() {
+    if (m_state == State::Joined) {
+        setState(State::Reconnecting);
+    }
+}
+
+void TelepartySession::onPeerPresent(const QString &username) {
+    if (username.isEmpty() || username == m_memberId) return;
+    if (!username.startsWith(QLatin1String("FX_"))) return;
+
+    if (m_state == State::Connecting && m_discoverTimer.isActive() && m_isHost) {
+        // Another FLUX participant is already in this Syncplay room: pick another 5-digit code
+        handleHostCollision();
+    }
+}
+
+void TelepartySession::onPeerLeft(const QString &username) {
+    if (username.isEmpty()) return;
+    m_lastEventId.remove(username);
+    removeMember(username);
 }
 
 void TelepartySession::onDiscoveryTimeout() {
     if (m_state != State::Connecting) return;
 
     if (m_isHost) {
-        becomeJoined();   // nobody else uses this code: the room is ours
+        becomeJoined(); // nobody else uses this code: the room is ours
     } else {
         fail(QStringLiteral("No Teleparty session found with that code."));
     }
@@ -457,52 +314,88 @@ void TelepartySession::onHeartbeat() {
 // Messages
 // ============================================================================
 
-void TelepartySession::onMessage(const QString &topic, const QByteArray &payload) {
-    if (m_state == State::Idle || topic != m_topic || payload.size() > kMaxMessageBytes) return;
+bool TelepartySession::isRecognizedEventType(const QString &eventType) {
+    static const QSet<QString> kAllowedEvents = {
+        QStringLiteral("open"),
+        QStringLiteral("play"),
+        QStringLiteral("pause"),
+        QStringLiteral("seek"),
+        QStringLiteral("state"),
+        QStringLiteral("syncme")
+    };
+    return kAllowedEvents.contains(eventType);
+}
 
-    QJsonParseError parseError;
-    const QJsonDocument doc = QJsonDocument::fromJson(payload, &parseError);
-    if (parseError.error != QJsonParseError::NoError || !doc.isObject()) return;
-
-    const QJsonObject o = doc.object();
+void TelepartySession::onFluxMessage(const QString &senderUsername, const QJsonObject &o) {
+    if (m_state == State::Idle) return;
     if (o.value(QStringLiteral("v")).toInt() != kProtocolVersion) return;
 
-    const QString from = o.value(QStringLiteral("from")).toString();
+    QString from = o.value(QStringLiteral("f")).toString();
+    if (from.isEmpty()) {
+        from = o.value(QStringLiteral("from")).toString();
+    }
     const QString type = o.value(QStringLiteral("t")).toString();
-    if (from.isEmpty() || from.size() > 32 || from == m_memberId) return;   // ignore our own echo
+    if (from.isEmpty() || from.size() > 32 || from == m_memberId) return;
+
+    // Anti-spoofing: sender identity in payload must match the Syncplay server's Chat username
+    if (!senderUsername.isEmpty() && from != senderUsername) {
+        FLUX_LOG_WARN("Teleparty",
+                      QString("Rejected spoofed FLUX message: payload from='%1' != chat username='%2'")
+                          .arg(from, senderUsername));
+        return;
+    }
 
     if (type == QLatin1String("bye")) {
+        m_lastEventId.remove(from);
         removeMember(from);
+        return;
+    }
+
+    if (type != QLatin1String("hello") &&
+        type != QLatin1String("presence") &&
+        type != QLatin1String("event")) {
+        FLUX_LOG_WARN("Teleparty", QString("Rejected unknown FLUX message type '%1'").arg(type));
         return;
     }
 
     touchMember(from);
 
     if (type == QLatin1String("hello")) {
+        // Reset sequence tracking for new / reconnected member
+        m_lastEventId.remove(from);
         // Let the newcomer know we exist, and let the sync layer share the current state
         publishMessage(makeMessage(QStringLiteral("presence")));
-        if (m_state == State::Joined) emit memberJoined(from);
+        if (m_state == State::Joined) {
+            emit memberJoined(from);
+        }
 
     } else if (type == QLatin1String("presence")) {
         if (m_state == State::Connecting && m_discoverTimer.isActive()) {
             if (m_isHost) {
-                // Someone already uses this code: pick another one
-                m_discoverTimer.stop();
-                if (--m_attemptsLeft <= 0) {
-                    fail(QStringLiteral("Couldn't create a session. Please try again."));
-                    return;
-                }
-                m_mqtt->disconnectFromBroker();
-                m_code = generateCode();
-                startSession();
+                handleHostCollision();
             } else {
-                becomeJoined();   // found the session
+                becomeJoined(); // found the session
             }
         }
 
     } else if (type == QLatin1String("event")) {
         if (m_state == State::Joined || m_state == State::Reconnecting) {
-            emit eventReceived(o.value(QStringLiteral("e")).toString(),
+            const QString eventType = o.value(QStringLiteral("e")).toString();
+            if (!isRecognizedEventType(eventType)) {
+                FLUX_LOG_WARN("Teleparty", QString("Rejected unrecognized FLUX event '%1'").arg(eventType));
+                return;
+            }
+
+            // Deduplicate events by sequence number per sender
+            const qint64 seq = o.value(QStringLiteral("i")).toInteger(0);
+            if (seq > 0) {
+                if (m_lastEventId.value(from, 0) == seq) {
+                    return; // duplicate event
+                }
+                m_lastEventId.insert(from, seq);
+            }
+
+            emit eventReceived(eventType,
                                o.value(QStringLiteral("d")).toObject().toVariantMap(),
                                from);
         }
@@ -510,25 +403,30 @@ void TelepartySession::onMessage(const QString &topic, const QByteArray &payload
 }
 
 bool TelepartySession::sendEvent(const QString &type, const QVariantMap &data) {
-    if (m_state != State::Joined || type.isEmpty()) return false;
-    return m_mqtt->publish(m_topic, makeMessage(QStringLiteral("event"), type, data));
+    if (m_state != State::Joined || !isRecognizedEventType(type)) return false;
+    return m_client->sendFluxMessage(makeMessage(QStringLiteral("event"), type, data));
 }
 
-QByteArray TelepartySession::makeMessage(const QString &type, const QString &eventType,
-                                         const QVariantMap &data) const {
+QJsonObject TelepartySession::makeMessage(const QString &type, const QString &eventType,
+                                          const QVariantMap &data) {
     QJsonObject o;
     o.insert(QStringLiteral("v"), kProtocolVersion);
     o.insert(QStringLiteral("t"), type);
-    o.insert(QStringLiteral("from"), m_memberId);
+    o.insert(QStringLiteral("f"), m_memberId);
     if (!eventType.isEmpty()) {
+        o.insert(QStringLiteral("i"), ++m_nextEventId);
         o.insert(QStringLiteral("e"), eventType);
-        o.insert(QStringLiteral("d"), QJsonObject::fromVariantMap(data));
+        if (!data.isEmpty()) {
+            o.insert(QStringLiteral("d"), QJsonObject::fromVariantMap(data));
+        }
     }
-    return QJsonDocument(o).toJson(QJsonDocument::Compact);
+    return o;
 }
 
-void TelepartySession::publishMessage(const QByteArray &message) {
-    if (!m_topic.isEmpty()) m_mqtt->publish(m_topic, message);
+void TelepartySession::publishMessage(const QJsonObject &message) {
+    if (!m_room.isEmpty()) {
+        m_client->sendFluxMessage(message);
+    }
 }
 
 // ============================================================================
@@ -551,6 +449,7 @@ void TelepartySession::pruneMembers() {
     bool changed = false;
     for (auto it = m_members.begin(); it != m_members.end();) {
         if (it.value() < cutoff) {
+            m_lastEventId.remove(it.key());
             it = m_members.erase(it);
             changed = true;
         } else {
@@ -568,11 +467,11 @@ QString TelepartySession::generateCode() {
     return QString::number(QRandomGenerator::global()->bounded(10000, 100000));
 }
 
-// The room name on the broker is a hash of the code, not the code itself
-QString TelepartySession::roomTopic(const QString &code) {
+// Deterministic mapping of 5-digit code to a 24-character Syncplay room name (limit: 35 chars)
+QString TelepartySession::roomNameForCode(const QString &code) {
     const QByteArray hash = QCryptographicHash::hash(
         QByteArrayLiteral("flux-teleparty-v1:") + code.toUtf8(), QCryptographicHash::Sha256).toHex();
-    return QStringLiteral("flux/tp/v1/") + QString::fromLatin1(hash.left(24));
+    return QStringLiteral("FLUX-TP-") + QString::fromLatin1(hash.left(16));
 }
 
 } // namespace Flux
