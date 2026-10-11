@@ -250,9 +250,7 @@ Popup {
 
                 Text {
                     Layout.fillWidth: true
-                    text: fluxUpdater && !fluxUpdater.portable
-                          ? "FLUX will close and restart. Windows may ask for permission to install."
-                          : "FLUX will close and restart in a moment."
+                    text: "FLUX will close and restart in a moment."
                     color: Theme.textDim
                     font.pixelSize: 12
                     wrapMode: Text.Wrap

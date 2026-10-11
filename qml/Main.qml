@@ -9,7 +9,7 @@ import "components/MediaFormatter.js" as Formatter
 ApplicationWindow {
     id: window
 
-    visible: true
+    visible: false
     // Restore the last window size (clamped to the minimum); position is left to the OS
     width: fluxUser ? Math.max(960, fluxUser.intValue("window/width", 1280)) : 1280
     height: fluxUser ? Math.max(600, fluxUser.intValue("window/height", 800)) : 800
@@ -20,6 +20,7 @@ ApplicationWindow {
     font.family: Theme.fontFamily
     flags: Qt.Window | Qt.FramelessWindowHint | Qt.WindowMinMaxButtonsHint
 
+    property bool startupComplete: false
     property bool isFullscreen: false
     property string currentPage: "search" // "search" | "library" | "player"
     property string pageBeforePlayer: "search" // where Back from the player returns to
@@ -297,15 +298,22 @@ ApplicationWindow {
         onActivated: toggleFullscreen()
     }
 
-    // ---- Keyboard focus management -------------------------------------------------
-    Component.onCompleted: {
+    // ---- Startup transition & keyboard focus management ----------------------------
+    function completeStartup() {
+        if (window.startupComplete) return
+        window.startupComplete = true
         if (fluxUser && fluxUser.boolValue("window/maximized", false)) {
             window.showMaximized()
+        } else {
+            window.showNormal()
         }
+        window.raise()
+        window.requestActivate()
+        startupPopup.visible = false
     }
 
     onClosing: function(close) {
-        if (!fluxUser) return
+        if (!fluxUser || !window.startupComplete) return
         fluxUser.setValue("window/maximized", window.visibility === Window.Maximized)
         // Only remember the size of a normal window (not maximized / fullscreen)
         if (window.visibility === Window.Windowed) {
@@ -585,5 +593,11 @@ ApplicationWindow {
     // Frameless Window Edge Resize Handles
     WindowResizeBorders {
         window: window
+    }
+
+    // Discord-style startup updater popup window
+    StartupPopup {
+        id: startupPopup
+        onFinished: window.completeStartup()
     }
 }

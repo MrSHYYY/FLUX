@@ -127,6 +127,7 @@ qt_add_qml_module(FLUX
         qml/components/DownloadsPanel.qml
         qml/components/FolderPicker.qml
         qml/components/UpdateMenu.qml
+        qml/components/StartupPopup.qml
         qml/components/TelepartyMenu.qml
         qml/components/CardMenu.qml
 )

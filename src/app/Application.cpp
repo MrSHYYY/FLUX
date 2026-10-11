@@ -150,11 +150,7 @@ bool Application::initialize(QQmlApplicationEngine &engine) {
     rootContext->setContextProperty("fluxLibrary", m_searchManager->libraryModel());
     rootContext->setContextProperty("fluxLogger", &Logger::instance());
 
-    // 5. Quiet update check shortly after launch (lights a dot on the ⋯ menu if a newer
-    //    release exists; never shows an error or interrupts playback)
-    QTimer::singleShot(4000, m_updater.get(), [updater = m_updater.get()]() {
-        updater->checkForUpdates(true);
-    });
+    // 5. Startup update check is driven immediately by the Discord-style StartupPopup window
 
     FLUX_LOG_INFO("Application", "Core services registered with QML engine");
     return true;

@@ -168,7 +168,7 @@ void Updater::checkForUpdates(bool silent)
     request.setRawHeader("X-GitHub-Api-Version", "2022-11-28");
     request.setHeader(QNetworkRequest::UserAgentHeader,
                       QByteArray("FLUX-Updater/") + FLUX_VERSION);
-    request.setTransferTimeout(15000);
+    request.setTransferTimeout(6000);
 
     QNetworkReply *reply = m_network.get(request);
     m_reply = reply;
@@ -216,7 +216,7 @@ void Updater::onCheckFinished(QNetworkReply *reply, bool silent)
 
     if (QVersionNumber::compare(latest, current) <= 0) {
         m_hasUpdate = false;
-        setState(silent ? State::Idle : State::UpToDate);
+        setState(State::UpToDate);
         return;
     }
 
@@ -459,8 +459,20 @@ try {
     } else {
         script += QStringLiteral(R"PS($setup = %1
 try {
-    Log 'running installer'
-    $p = Start-Process -FilePath $setup -ArgumentList ('/S /D=' + $appDir) -Verb RunAs -Wait -PassThru
+    $needAdmin = $false
+    $probe = Join-Path $appDir '.flux_upd_probe'
+    try {
+        [System.IO.File]::WriteAllText($probe, 'ok')
+        Remove-Item -LiteralPath $probe -Force -ErrorAction SilentlyContinue
+    } catch {
+        $needAdmin = $true
+    }
+    Log ('running installer (needAdmin=' + $needAdmin + ')')
+    if ($needAdmin) {
+        $p = Start-Process -FilePath $setup -ArgumentList ('/S /D=' + $appDir) -Verb RunAs -Wait -PassThru
+    } else {
+        $p = Start-Process -FilePath $setup -ArgumentList ('/S /D=' + $appDir) -Wait -PassThru
+    }
     Log ('installer exit code ' + $p.ExitCode)
 } catch { Log ('installer failed: ' + $_.Exception.Message) }
 )PS")
