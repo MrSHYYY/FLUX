@@ -350,6 +350,9 @@ void TelepartySession::onHeartbeat() {
 bool TelepartySession::isRecognizedEventType(const QString &eventType) {
     static const QSet<QString> kAllowedEvents = {
         QStringLiteral("open"),
+        QStringLiteral("lopen"),
+        QStringLiteral("lver"),
+        QStringLiteral("lstart"),
         QStringLiteral("play"),
         QStringLiteral("pause"),
         QStringLiteral("seek"),

@@ -2,10 +2,17 @@
 
 #include <QElapsedTimer>
 #include <QHash>
+#include <QJsonObject>
 #include <QList>
+#include <QMutex>
+#include <QObject>
 #include <QSet>
 #include <QString>
 #include <QVariantMap>
+
+#include <atomic>
+#include <functional>
+#include <memory>
 
 namespace Flux {
 
@@ -506,4 +513,192 @@ struct SyncDiagnostics {
     QVariantMap toVariantMap() const;
 };
 
+// ============================================================================
+// 8. Local Video Teleparty Verification & Media Matching
+// ============================================================================
+enum class TelepartyMediaMode {
+    OnlineCatalog = 0, // Streamed from shared BDIX catalog URL
+    LocalFile = 1      // Each participant plays their own verified local copy
+};
+
+QString telepartyMediaModeToString(TelepartyMediaMode mode);
+
+enum class LocalVerificationState {
+    None = 0,                 // Not in a Local Teleparty session
+    WaitingForLocalSelection, // Host declared local media; guest has not selected a local file yet
+    InspectingLocalMedia,     // Extracting local media metadata / content fingerprint
+    VerifiedCompatible,       // Local file verified compatible with host's descriptor
+    IncompatibleMedia,        // Verification failed (duration, title, or fingerprint mismatch)
+    UnresolvedMetadata,       // Could not extract sufficient metadata/duration to verify safely
+    OpeningMedia,             // Verified file is opening in libVLC
+    BufferingMedia,           // Verified file is buffering / seeking to initial position
+    ReadyToSync,              // File open, playable, seekable, verified, and ready for timeline sync
+    PlaybackError             // Local file missing, unreadable, unsupported, or failed to decode
+};
+
+QString localVerificationStateToCode(LocalVerificationState state);
+LocalVerificationState localVerificationStateFromCode(const QString &code);
+QString localVerificationStateToString(LocalVerificationState state);
+
+enum class LocalCompatibilityReason {
+    None = 0,
+    MatchedExact,
+    MatchedRemuxOrReencode,
+    MissingFile,
+    UnreadableOrEmptyFile,
+    UnsupportedContainer,
+    UnplayableMedia,
+    InsufficientMetadata,
+    TitleMismatch,
+    EpisodeMismatch,
+    EditionMismatch,
+    DurationMismatch,
+    FingerprintMismatch,
+    StrictHashMismatch,
+    InvalidSessionDescriptor
+};
+
+QString localCompatibilityReasonToCode(LocalCompatibilityReason reason);
+LocalCompatibilityReason localCompatibilityReasonFromCode(const QString &code);
+QString localCompatibilityReasonToMessage(LocalCompatibilityReason reason);
+
+struct LocalVerificationPolicy {
+    // Default 2000 ms (2.0 s) duration tolerance accounts for container muxing padding,
+    // audio pre-roll / trailing silence differences, and MKV/MP4 timestamp rounding while
+    // rejecting different cuts (Theatrical vs Extended), wrong episodes, or truncated files.
+    qint64 durationToleranceMs = 2000;
+    bool allowDifferentContainers = true;
+    bool allowDifferentFileSizes = true;
+    bool requireContentFingerprint = true;
+    bool allowSameTitleAndDurationWhenRemuxed = false;
+    bool requireExactFullFileHash = false;
+};
+
+struct LocalMediaDescriptor {
+    QString sessionId;           // Session-scoped identifier
+    QString mediaId;             // Compact session-scoped shared media ID ("LM_<16hex>")
+    qint64 revision = 0;         // Session media revision
+    QString displayTitle;        // Human-readable title (never a filesystem path)
+    QString normalizedTitle;     // Case-folded, separator-normalized core title
+    QString episodeTag;          // Normalized season/episode token if episodic (e.g. "s01e02")
+    QString yearTag;             // 4-digit release year if present in filename/title (e.g. "2014")
+    QString editionTag;          // Normalized cut/edition tag if present ("extended", "directors cut", "imax")
+    qint64 durationMs = 0;       // Media duration in milliseconds (> 0 required for verification)
+    qint64 fileSizeBytes = 0;    // Local file size in bytes
+    QString containerFormat;     // Normalized uppercase extension/container ("MKV", "MP4", "AVI", "MOV", "WEBM", "TS")
+    QString videoCodec;          // Optional video codec identifier (e.g. "H264", "HEVC", "AV1")
+    QString audioCodec;          // Optional audio codec identifier (e.g. "AAC", "EAC3", "OPUS")
+    int width = 0;               // Optional video width
+    int height = 0;              // Optional video height
+    double frameRate = 0.0;      // Optional video frame rate
+    qint64 streamStartOffsetMs = 0; // Container start offset if non-zero
+    // Versioned multi-window content fingerprint:
+    //   "v1:<windowCount>:<windowBytes>:<byteDigest16>:<payloadDigest16>"
+    QString contentFingerprint;
+    QString fullFileSha256;      // Optional full-file SHA-256 hex digest (strict mode)
+    qint64 lastModifiedMs = 0;   // Local-only mtime for cache invalidation (never transmitted)
+
+    bool isValidForSession() const;
+    QJsonObject toNetworkJson() const;
+    static LocalMediaDescriptor fromNetworkJson(const QJsonObject &obj);
+    QVariantMap toVariantMap() const;
+
+    // Generates a privacy-safe, session-scoped media identity from the descriptor
+    static QString generateSessionMediaId(const QString &sessionId,
+                                          qint64 revision,
+                                          const LocalMediaDescriptor &desc);
+
+    // Privacy guard: returns true if a string or JSON object contains local filesystem paths,
+    // drive letters ("C:"), UNC paths, or file:// URLs that must never be transmitted.
+    static bool containsPrivatePathLeak(const QString &text);
+    static bool containsPrivatePathLeakInJson(const QJsonObject &obj);
+};
+
+struct LocalCompatibilityResult {
+    LocalVerificationState state = LocalVerificationState::None;
+    LocalCompatibilityReason reason = LocalCompatibilityReason::None;
+    qint64 durationDeltaMs = 0;
+    bool exactContentMatch = false;
+    bool payloadEssenceMatch = false;
+    bool titleMatched = false;
+    bool durationWithinTolerance = false;
+    QString userMessage;
+
+    bool isCompatible() const {
+        return state == LocalVerificationState::VerifiedCompatible ||
+               state == LocalVerificationState::OpeningMedia ||
+               state == LocalVerificationState::BufferingMedia ||
+               state == LocalVerificationState::ReadyToSync;
+    }
+};
+
+struct ParticipantLocalStatus {
+    QString peerId;
+    QString mediaId;
+    qint64 revision = 0;
+    LocalVerificationState state = LocalVerificationState::WaitingForLocalSelection;
+    LocalCompatibilityReason reason = LocalCompatibilityReason::None;
+    qint64 durationDeltaMs = 0;
+    qint64 updatedAtLocalMs = 0;
+};
+
+class LocalMediaInspector {
+public:
+    static constexpr int kDefaultWindowCount = 5;
+    static constexpr qint64 kDefaultWindowBytes = 65536; // 64 KB per sample window
+    using CancelToken = std::shared_ptr<std::atomic<bool>>;
+    using InspectCallback = std::function<void(LocalMediaDescriptor, LocalCompatibilityReason)>;
+
+    // Normalizes a filename or title into (normalizedTitle, displayTitle, episodeTag, yearTag, editionTag)
+    static void parseTitleAndTags(const QString &rawNameOrTitle,
+                                  QString &outNormalizedTitle,
+                                  QString &outDisplayTitle,
+                                  QString &outEpisodeTag,
+                                  QString &outYearTag,
+                                  QString &outEditionTag);
+
+    static QString normalizeContainerFormat(const QString &filePathOrExt);
+    static bool isSupportedContainer(const QString &containerFormat);
+
+    // Computes the versioned multi-window content fingerprint ("v1:5:65536:<byteDigest>:<payloadDigest>")
+    // without blocking on full-file reads for multi-gigabyte videos.
+    static QString computeMultiWindowFingerprint(const QString &filePath,
+                                                 int windowCount = kDefaultWindowCount,
+                                                 qint64 windowBytes = kDefaultWindowBytes,
+                                                 CancelToken cancelToken = nullptr);
+
+    static QString computeFullFileSha256(const QString &filePath,
+                                         CancelToken cancelToken = nullptr);
+
+    // Extracts container duration (MP4/MOV mvhd, MKV/WebM EBML Segment Info, AVI avih)
+    // and stream metadata directly from the local file header.
+    static LocalMediaDescriptor inspectFile(const QString &filePath,
+                                            const QString &titleHint = QString(),
+                                            qint64 knownDurationMs = 0,
+                                            bool computeFullHash = false,
+                                            LocalCompatibilityReason *outErrorReason = nullptr,
+                                            CancelToken cancelToken = nullptr,
+                                            bool useCache = true);
+
+    // Asynchronous inspection on a worker thread with cancellation support
+    static CancelToken inspectFileAsync(QObject *context,
+                                        const QString &filePath,
+                                        const QString &titleHint,
+                                        qint64 knownDurationMs,
+                                        bool computeFullHash,
+                                        InspectCallback callback);
+
+    // Returns true if the file on disk has been deleted, replaced, or modified since descriptor extraction
+    static bool hasFileChangedSince(const QString &filePath, const LocalMediaDescriptor &desc);
+    static void clearCache();
+};
+
+class LocalMediaVerifier {
+public:
+    static LocalCompatibilityResult verify(const LocalMediaDescriptor &hostDesc,
+                                           const LocalMediaDescriptor &guestDesc,
+                                           const LocalVerificationPolicy &policy = LocalVerificationPolicy{});
+};
+
 } // namespace Flux
+

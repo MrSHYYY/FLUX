@@ -183,7 +183,7 @@ Popup {
 
                 Text {
                     Layout.fillWidth: true
-                    text: "Streaming only: downloaded files can't be shared."
+                    text: "Stream from catalog or watch a matching local video from your Library."
                     color: Theme.textMute
                     font.pixelSize: 11
                     wrapMode: Text.Wrap
@@ -372,6 +372,26 @@ Popup {
                     color: Theme.textDim
                     font.pixelSize: 12
                     wrapMode: Text.Wrap
+                }
+
+                Text {
+                    Layout.fillWidth: true
+                    visible: !!fluxSync && fluxSync.localMode && fluxSync.localStatusText.length > 0
+                    text: fluxSync ? fluxSync.localStatusText : ""
+                    color: (fluxSync && fluxSync.localErrorText.length > 0)
+                           ? Theme.danger
+                           : ((fluxSync && fluxSync.localPlaybackCommitted) ? Theme.success : Theme.warning)
+                    font.pixelSize: 11
+                    wrapMode: Text.Wrap
+                }
+
+                FluxButton {
+                    Layout.fillWidth: true
+                    visible: !!fluxSync && fluxSync.localMode && fluxSync.localReadinessTimedOut
+                    implicitHeight: 34
+                    variant: "secondary"
+                    text: "Retry verification wait"
+                    onClicked: if (fluxSync) fluxSync.retryLocalReadinessWait()
                 }
 
                 Text {

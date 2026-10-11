@@ -53,18 +53,38 @@ class TelepartySync : public QObject {
     Q_PROPERTY(double currentPlaybackRate READ currentPlaybackRate NOTIFY diagnosticsChanged)
     Q_PROPERTY(QString activeCorrectionMode READ activeCorrectionMode NOTIFY diagnosticsChanged)
 
+    // Local Video Teleparty properties
+    Q_PROPERTY(bool localMode READ isLocalSession NOTIFY localVerificationChanged)
+    Q_PROPERTY(QString mediaMode READ mediaModeString NOTIFY localVerificationChanged)
+    Q_PROPERTY(QString localVerificationState READ localVerificationStateString NOTIFY localVerificationChanged)
+    Q_PROPERTY(QString localStatusText READ localStatusText NOTIFY localVerificationChanged)
+    Q_PROPERTY(QString localErrorText READ localErrorText NOTIFY localVerificationChanged)
+    Q_PROPERTY(bool allParticipantsReady READ areAllParticipantsReadyToSync NOTIFY localVerificationChanged)
+    Q_PROPERTY(bool localPlaybackCommitted READ isLocalPlaybackCommitted NOTIFY localVerificationChanged)
+    Q_PROPERTY(bool localReadinessTimedOut READ isLocalReadinessTimedOut NOTIFY localVerificationChanged)
+    Q_PROPERTY(int readyParticipantCount READ readyParticipantCount NOTIFY localVerificationChanged)
+
 public:
+    static constexpr qint64 kDefaultLocalReadinessTimeoutMs = 45000;
+
     TelepartySync(TelepartySession *session, VLCPlayer *player, QObject *parent = nullptr);
+    ~TelepartySync() override;
 
     bool watching() const { return m_watching; }
     void setWatching(bool watching);
 
     QString currentUrl() const { return m_currentUrl; }
     QString currentTitle() const { return m_currentTitle; }
-    bool hasPartyMedia() const { return !m_currentUrl.isEmpty(); }
+    bool hasPartyMedia() const {
+        return !m_currentUrl.isEmpty() ||
+               (m_mediaMode == TelepartyMediaMode::LocalFile && m_hostLocalDescriptor.isValidForSession());
+    }
 
-    // True for validated catalog http(s) URLs: the only kind of media that can be watched together
+    // True for validated catalog http(s) URLs
     Q_INVOKABLE bool isStreamUrl(const QString &url) const;
+
+    // True for local filesystem paths or file:// URLs with supported video containers
+    Q_INVOKABLE bool isLocalFileUrl(const QString &urlOrPath) const;
 
     // Encodes a catalog stream URL into a compact movie/catalog ID (empty if not in local catalog)
     QString encodeCatalogMovieId(const QString &url) const;
@@ -72,16 +92,62 @@ public:
     // Resolves and validates a remote event payload ({id, n} or {url, title}) against the local catalog
     bool resolveCatalogMovie(const QVariantMap &data, QString &outUrl, QString &outTitle) const;
 
-    // The local user opened a video: tell everyone to open it too
+    // The local user opened a video:
+    // - Catalog stream URL -> OnlineCatalog mode ("open")
+    // - Local file URL/path -> LocalFile mode ("lopen" if host, or guest verification if guest)
     Q_INVOKABLE void broadcastOpen(const QString &url, const QString &title);
 
+    // Host declares or replaces the shared local video for a Local Teleparty session
+    Q_INVOKABLE bool broadcastLocalOpen(const QString &fileUrlOrPath,
+                                        const QString &title = QString(),
+                                        qint64 knownDurationMs = 0);
+
+    // Guest selects a local video from their library to verify against the host's LocalMediaDescriptor
+    Q_INVOKABLE bool selectGuestLocalMedia(const QString &fileUrlOrPath,
+                                           const QString &title = QString(),
+                                           qint64 knownDurationMs = 0);
+
+    // Retries waiting for participant readiness (or re-requests state) after a readiness timeout
+    Q_INVOKABLE void retryLocalReadinessWait();
+
+    // Cancels the current Local Teleparty media wait and resets local media state
+    Q_INVOKABLE void cancelLocalMediaSession();
+
     // The host was already watching something when the session started: make that the
-    // shared video (nothing is sent; newcomers learn about it through "state")
+    // shared video (nothing is sent; newcomers learn about it through "state" / "lopen")
     Q_INVOKABLE void adoptCurrent(const QString &url, const QString &title);
 
     // Open or catch up to the party's currently playing video at the party's live timestamp
     // (without broadcasting "open" or resetting other members)
     Q_INVOKABLE void joinPartyPlayback();
+
+    // Local Teleparty state & diagnostics getters
+    TelepartyMediaMode mediaMode() const { return m_mediaMode; }
+    bool isLocalSession() const { return m_mediaMode == TelepartyMediaMode::LocalFile; }
+    QString mediaModeString() const { return telepartyMediaModeToString(m_mediaMode); }
+    LocalVerificationState localVerificationState() const { return m_localVerificationState; }
+    QString localVerificationStateString() const { return localVerificationStateToString(m_localVerificationState); }
+    LocalCompatibilityReason localCompatibilityReason() const { return m_localCompatibilityReason; }
+    QString localStatusText() const;
+    QString localErrorText() const;
+
+    const LocalMediaDescriptor &hostLocalDescriptor() const { return m_hostLocalDescriptor; }
+    const LocalMediaDescriptor &guestLocalDescriptor() const { return m_guestLocalDescriptor; }
+    ParticipantLocalStatus peerLocalStatus(const QString &peerId) const;
+    bool areAllParticipantsReadyToSync() const;
+    bool isLocalParticipantSynchronized() const;
+    bool isLocalPlaybackCommitted() const { return m_localPlaybackCommitted; }
+    bool isLocalReadinessTimedOut() const { return m_localReadinessWaitTimedOut; }
+    int readyParticipantCount() const;
+
+    void setLocalVerificationPolicy(const LocalVerificationPolicy &policy) { m_verificationPolicy = policy; }
+    const LocalVerificationPolicy &localVerificationPolicy() const { return m_verificationPolicy; }
+
+    void setLocalReadinessTimeoutMs(qint64 timeoutMs);
+    qint64 localReadinessTimeoutMs() const { return m_localReadinessTimeoutMs; }
+
+    void setForceAsyncInspection(bool async) { m_forceAsyncInspection = async; }
+    bool forceAsyncInspection() const { return m_forceAsyncInspection; }
 
     // Observability & diagnostic getters
     qint64 smoothedRttMs() const { return m_clockEstimator.medianRttMs(); }
@@ -128,6 +194,10 @@ signals:
     void watchingChanged();
     void currentMediaChanged();
     void diagnosticsChanged();
+    void localVerificationChanged();
+
+    // Emitted when a guest needs to select the corresponding local video from their library
+    void localMediaPromptRequested(const QString &expectedTitle, qint64 expectedDurationMs, const QString &expectedContainer);
 
     // Another member opened (or you are catching up with) a video: open it in the UI
     void remoteOpenRequested(const QString &url, const QString &title, qint64 startMs);
@@ -160,6 +230,25 @@ private:
     void handlePlaybackTransition(const QString &type, const QVariantMap &data, const QString &from);
     void handleTimeSync(const QVariantMap &data, const QString &from);
     void handleReadiness(const QVariantMap &data, const QString &from);
+
+    // Local Teleparty protocol handlers & helpers
+    void handleLocalOpen(const QVariantMap &data, const QString &from);
+    void handleLocalVerifyReport(const QVariantMap &data, const QString &from);
+    void handleLocalStartCommit(const QVariantMap &data, const QString &from);
+    void finishHostLocalInspection(const QString &resolvedUrl,
+                                   const QString &resolvedLocalPath,
+                                   LocalMediaDescriptor desc,
+                                   LocalCompatibilityReason errReason);
+    void finishGuestLocalInspection(const QString &resolvedUrl,
+                                    const QString &resolvedLocalPath,
+                                    LocalMediaDescriptor guestDesc,
+                                    LocalCompatibilityReason errReason);
+    void updateLocalVerificationReadiness(bool allowBroadcast = true);
+    void sendLocalVerificationReport();
+    void tryCommitLocalPlaybackStart();
+    void onLocalReadinessTimeout();
+    void cancelActiveInspection();
+    void clearLocalSessionState();
 
     void executeScheduledAction(const ScheduledAction &action);
     void updateScheduleTimer();
@@ -250,7 +339,26 @@ private:
     ParticipantReadiness m_localReadiness = ParticipantReadiness::Idle;
     QHash<QString, ParticipantReadiness> m_peerReadiness;
 
+    // Local Video Teleparty state
+    TelepartyMediaMode m_mediaMode = TelepartyMediaMode::OnlineCatalog;
+    LocalVerificationPolicy m_verificationPolicy;
+    LocalVerificationState m_localVerificationState = LocalVerificationState::None;
+    LocalCompatibilityReason m_localCompatibilityReason = LocalCompatibilityReason::None;
+    LocalMediaDescriptor m_hostLocalDescriptor;
+    LocalMediaDescriptor m_guestLocalDescriptor;
+    QString m_localFilePath;
+    QHash<QString, ParticipantLocalStatus> m_peerLocalStatus;
+    LocalMediaInspector::CancelToken m_activeInspectCancel;
+    bool m_forceAsyncInspection = false;
+    bool m_localPlaybackCommitted = false;
+    bool m_hostSessionAlreadyStarted = false;
+    bool m_localReadinessWaitTimedOut = false;
+    qint64 m_localReadinessWaitStartedMs = 0;
+    qint64 m_localReadinessTimeoutMs = kDefaultLocalReadinessTimeoutMs;
+    QTimer m_localReadinessTimeoutTimer;
+
     QString m_prevSessionState;
 };
 
 } // namespace Flux
+

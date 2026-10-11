@@ -126,8 +126,14 @@ ApplicationWindow {
     }
 
     function playMedia(url, title) {
-        // Offline playback is disabled while in a Teleparty session
-        if (window.inTeleparty && fluxSync && !fluxSync.isStreamUrl(url)) {
+        // During a Teleparty, only validated catalog streams or supported local video files are allowed
+        if (window.inTeleparty && fluxSync && !fluxSync.isStreamUrl(url) && !fluxSync.isLocalFileUrl(url)) {
+            return
+        }
+
+        // Guest selecting a local video in a Local Teleparty session: verify compatibility first
+        if (window.inTeleparty && fluxSync && fluxTeleparty && !fluxTeleparty.isHost && fluxSync.isLocalFileUrl(url)) {
+            fluxSync.selectGuestLocalMedia(url, title)
             return
         }
 
@@ -153,16 +159,16 @@ ApplicationWindow {
 
         playerView.offerResume(resumeMs)
 
-        if (window.inTeleparty && fluxSync) {
-            fluxSync.broadcastOpen(url, title)
-        }
-
         if (fluxPlayer) {
             if (resumeMs > 0) {
                 fluxPlayer.playFrom(url, resumeMs)
             } else {
                 fluxPlayer.play(url)
             }
+        }
+
+        if (window.inTeleparty && fluxSync) {
+            fluxSync.broadcastOpen(url, title)
         }
     }
 
@@ -174,7 +180,7 @@ ApplicationWindow {
 
         currentPlayingTitle = title
         if (currentPage !== "player") {
-            pageBeforePlayer = (currentPage === "library") ? "search" : currentPage
+            pageBeforePlayer = currentPage
         }
         currentPage = "player"
 
@@ -233,11 +239,10 @@ ApplicationWindow {
         if (isFullscreen) {
             toggleFullscreen()
         }
-        currentPage = (!window.inTeleparty && pageBeforePlayer === "library") ? "library" : "search"
+        currentPage = (pageBeforePlayer === "library") ? "library" : "search"
     }
 
     function showLibrary() {
-        if (window.inTeleparty) return
         if (fluxPlayer) {
             fluxPlayer.pause()
         }
@@ -344,16 +349,13 @@ ApplicationWindow {
         }
 
         function onJoinedSession() {
-            // Offline playback is unavailable during a Teleparty: leave the Library page
-            // and stop any offline file that might be loaded
-            if (window.pageBeforePlayer === "library") window.pageBeforePlayer = "search"
-            if (window.currentPage === "library") window.currentPage = "search"
-
             if (fluxPlayer && fluxPlayer.url.length > 0) {
-                if (fluxSync && fluxSync.isStreamUrl(fluxPlayer.url)) {
-                    // Host already watching (or paused on) a stream: make it the party's current video
+                if (fluxSync && (fluxSync.isStreamUrl(fluxPlayer.url) || fluxSync.isLocalFileUrl(fluxPlayer.url))) {
+                    // Host already watching (or paused on) a stream or local video: make it the party's current video
                     if (fluxTeleparty.isHost && fluxPlayer.state !== "Idle" && fluxPlayer.state !== "Stopped") {
                         fluxSync.adoptCurrent(fluxPlayer.url, window.currentPlayingTitle)
+                    } else if (!fluxTeleparty.isHost && fluxSync.isLocalFileUrl(fluxPlayer.url)) {
+                        fluxPlayer.pause()
                     }
                 } else {
                     fluxPlayer.stop()
@@ -371,8 +373,14 @@ ApplicationWindow {
         }
 
         function onPartyMediaAvailable(url, title, positionMs, durationMs) {
-            if (fluxUser) {
+            if (fluxUser && !url.startsWith("local://")) {
                 fluxUser.notePartyMedia(url, title, positionMs, durationMs)
+            }
+        }
+
+        function onLocalMediaPromptRequested(expectedTitle, expectedDurationMs, expectedContainer) {
+            if (window.currentPage !== "library") {
+                window.showLibrary()
             }
         }
 
@@ -506,7 +514,7 @@ ApplicationWindow {
                                                 : (currentPage === "search" ? (searchPage.bookmarksOpen ? "bookmarks" : "home") : "")
             overlayMode: currentPage === "player"
             shown: !window.isFullscreen && (currentPage !== "player" || playerView.showControls || menuOpen)
-            offlineLocked: window.inTeleparty
+            offlineLocked: false
             showNowPlaying: !!fluxPlayer
                             && (fluxPlayer.isPlaying
                                 || (window.inTeleparty
