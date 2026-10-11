@@ -163,3 +163,15 @@ html,body{width:100%;height:100%;overflow:hidden}
 .network-dialog-foot p[data-result="success"]{color:#f2f3ee}.network-dialog-foot p[data-result="failure"]{color:#c5c5c5}
 @media(max-width:600px){.network-check-trigger{min-height:32px;font-size:10px}.network-dialog{width:calc(100vw - 20px);height:calc(100svh - 20px);padding:16px;gap:10px;grid-template-rows:auto auto minmax(120px,1fr) auto}.network-dialog-head h2{font-size:18px}.network-dialog-copy{font-size:11px}.network-dialog-foot{align-items:flex-start;flex-direction:column}.network-result-actions{width:100%}.network-result-button{flex:1}}
 @media(max-height:600px){.network-check-trigger{min-height:28px;padding:5px 8px;margin-top:5px;font-size:9px}}
+
+.network-dialog{height:min(360px,calc(100svh - 32px));grid-template-rows:auto auto minmax(96px,1fr) auto;gap:14px}
+.network-check-state{display:flex;align-items:center;gap:14px;min-height:96px;padding:18px;border:1px solid #292929;border-radius:12px;background:#111}
+.network-check-state p{margin:0;color:#eee;font-size:14px;line-height:1.5}
+.network-check-indicator{display:grid;place-items:center;width:28px;height:28px;flex:0 0 28px;border-radius:50%;font:600 15px Manrope,system-ui,sans-serif}
+.network-check-indicator[data-state="checking"]{border:2px solid #555;border-top-color:#f2f3ee;animation:network-spin .8s linear infinite}
+.network-check-indicator[data-state="success"]{background:#f2f3ee;color:#111}.network-check-indicator[data-state="success"]::before{content:"✓"}
+.network-check-indicator[data-state="failure"]{border:1px solid #666;color:#eee}.network-check-indicator[data-state="failure"]::before{content:"×";font-size:19px}
+.network-dialog-foot button:disabled{opacity:.45;cursor:wait}
+@keyframes network-spin{to{transform:rotate(360deg)}}
+@media(max-width:600px){.network-dialog{height:min(360px,calc(100svh - 20px));grid-template-rows:auto auto minmax(96px,1fr) auto;gap:12px}.network-check-state{min-height:92px;padding:14px}.network-check-state p{font-size:13px}.network-dialog-foot{align-items:center;flex-direction:row}.network-dialog-foot p{font-size:10px}.network-result-button{flex:0 0 auto}}
+@media(prefers-reduced-motion:reduce){.network-check-indicator[data-state="checking"]{animation:none;border-color:#f2f3ee}}

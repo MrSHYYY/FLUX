@@ -38,30 +38,64 @@ function formatSize(bytes) {
 loadLatestRelease();
 
 const networkCheckDialog = document.querySelector("#network-check-dialog");
-const networkCheckFrame = document.querySelector("#network-check-frame");
 const networkCheckResult = document.querySelector("#network-check-result");
+const networkCheckIndicator = document.querySelector("#network-check-indicator");
+const networkCheckAgain = document.querySelector("#network-check-again");
+const networkCheckUrl = "http://172.16.50.4/";
+let activeNetworkCheck = null;
+let networkCheckRun = 0;
 
-document.querySelector("#network-check-open").addEventListener("click", () => {
-  networkCheckResult.textContent = "Allow local network access if your browser asks.";
-  networkCheckResult.removeAttribute("data-result");
-  networkCheckFrame.src = "http://172.16.50.4/";
-  networkCheckDialog.showModal();
-});
+document.querySelector("#network-check-open").addEventListener("click", runNetworkCheck);
+networkCheckAgain.addEventListener("click", runNetworkCheck);
 
 document.querySelector("#network-check-close").addEventListener("click", () => {
   networkCheckDialog.close();
 });
 
 networkCheckDialog.addEventListener("close", () => {
-  networkCheckFrame.removeAttribute("src");
+  networkCheckRun += 1;
+  activeNetworkCheck?.abort();
+  activeNetworkCheck = null;
 });
 
-document.querySelector("#network-check-yes").addEventListener("click", () => {
-  networkCheckResult.textContent = "Network check passed. FLUX should work on this network.";
-  networkCheckResult.dataset.result = "success";
-});
+async function runNetworkCheck() {
+  if (!networkCheckDialog.open) networkCheckDialog.showModal();
 
-document.querySelector("#network-check-no").addEventListener("click", () => {
-  networkCheckResult.textContent = "Couldn’t reach the local page. FLUX likely won’t work on this network.";
-  networkCheckResult.dataset.result = "failure";
-});
+  activeNetworkCheck?.abort();
+  const run = ++networkCheckRun;
+
+  networkCheckResult.textContent = "Checking 172.16.50.4…";
+  networkCheckIndicator.dataset.state = "checking";
+  networkCheckAgain.disabled = true;
+
+  const controller = new AbortController();
+  activeNetworkCheck = controller;
+  const timeout = window.setTimeout(() => controller.abort(), 15000);
+
+  try {
+    await fetch(networkCheckUrl, {
+      method: "GET",
+      mode: "no-cors",
+      cache: "no-store",
+      redirect: "follow",
+      signal: controller.signal,
+      targetAddressSpace: "local",
+    });
+
+    if (run === networkCheckRun) {
+      networkCheckResult.textContent = "FLUX should work on this network.";
+      networkCheckIndicator.dataset.state = "success";
+    }
+  } catch (error) {
+    if (run === networkCheckRun) {
+      networkCheckResult.textContent = "Couldn’t reach the FLUX network source. It may be unavailable, or your browser may have blocked local network access.";
+      networkCheckIndicator.dataset.state = "failure";
+    }
+  } finally {
+    window.clearTimeout(timeout);
+    if (run === networkCheckRun) {
+      activeNetworkCheck = null;
+      networkCheckAgain.disabled = false;
+    }
+  }
+}
