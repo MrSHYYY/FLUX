@@ -1,31 +1,34 @@
 #pragma once
 
 #include <QElapsedTimer>
+#include <QHash>
 #include <QObject>
 #include <QString>
 #include <QTimer>
 #include <QVariantMap>
+#include <memory>
 
 #include "../search/MediaLibrary.h"
+#include "TelepartyEngine.h"
 
 namespace Flux {
 
 class TelepartySession;
 class VLCPlayer;
 
-// Keeps every member's player in step.
+// Keeps every member's player in step using an authoritative timeline, 4-timestamp
+// monotonic clock synchronization, future action scheduling, and a three-tier
+// adaptive drift controller (deadband -> playback-rate nudge -> controlled hard seek).
 //
-// Local user actions (open a video, play / pause, seek) are sent to the room as compact events;
-// events from other members are validated against the local catalog and applied to the local
-// player without being sent back.
-//
-// Events (all carried by TelepartySession::sendEvent):
-//   open    {id, n?}                 somebody opened a catalog video: everyone opens it from the start
-//   play    {t}                      resume at position t (ms)
-//   pause   {t}                      pause at position t
-//   seek    {t}                      jump to position t
-//   state   {id, n?, t, d, p}        "this is what I am watching": answers a newcomer
-//   syncme  {}                       "tell me what you are watching" (member returning to the player)
+// Events (all carried by TelepartySession::sendEvent within the 150-char Syncplay limit):
+//   open    {id, n?, rev, ht}            opened a catalog video; resets timeline to 0
+//   play    {t, rev, ht, r?}             resume at position t (ms) anchored at host time ht
+//   pause   {t, rev, ht}                 pause at position t (ms) anchored at host time ht
+//   seek    {t, rev, ht}                 jump to position t (ms) anchored at host time ht
+//   state   {id, n?, t, d, p, rev, ht}   authoritative timeline snapshot for newcomers/resync
+//   syncme  {}                           request current authoritative timeline snapshot
+//   ts      {q, l?} / {p, q, r, s}       4-timestamp monotonic clock-offset & RTT exchange
+//   rd      {s, t, rev}                  participant decoder/buffer readiness report
 //
 // Only validated catalog http(s) streams are shared; offline files exist on one machine only.
 class TelepartySync : public QObject {
@@ -36,6 +39,19 @@ class TelepartySync : public QObject {
     Q_PROPERTY(QString currentUrl READ currentUrl NOTIFY currentMediaChanged)
     Q_PROPERTY(QString currentTitle READ currentTitle NOTIFY currentMediaChanged)
     Q_PROPERTY(bool hasPartyMedia READ hasPartyMedia NOTIFY currentMediaChanged)
+
+    // Read-only observability & synchronization diagnostics
+    Q_PROPERTY(qint64 smoothedRttMs READ smoothedRttMs NOTIFY diagnosticsChanged)
+    Q_PROPERTY(qint64 jitterMs READ jitterMs NOTIFY diagnosticsChanged)
+    Q_PROPERTY(qint64 clockOffsetMs READ clockOffsetMs NOTIFY diagnosticsChanged)
+    Q_PROPERTY(qint64 clockUncertaintyMs READ clockUncertaintyMs NOTIFY diagnosticsChanged)
+    Q_PROPERTY(qint64 scheduledLeadTimeMs READ scheduledLeadTimeMs NOTIFY diagnosticsChanged)
+    Q_PROPERTY(qint64 currentRevision READ currentRevision NOTIFY diagnosticsChanged)
+    Q_PROPERTY(qint64 authoritativePositionMs READ authoritativePositionMs NOTIFY diagnosticsChanged)
+    Q_PROPERTY(qint64 actualPositionMs READ actualPositionMs NOTIFY diagnosticsChanged)
+    Q_PROPERTY(qint64 signedDriftMs READ signedDriftMs NOTIFY diagnosticsChanged)
+    Q_PROPERTY(double currentPlaybackRate READ currentPlaybackRate NOTIFY diagnosticsChanged)
+    Q_PROPERTY(QString activeCorrectionMode READ activeCorrectionMode NOTIFY diagnosticsChanged)
 
 public:
     TelepartySync(TelepartySession *session, VLCPlayer *player, QObject *parent = nullptr);
@@ -67,9 +83,51 @@ public:
     // (without broadcasting "open" or resetting other members)
     Q_INVOKABLE void joinPartyPlayback();
 
+    // Observability & diagnostic getters
+    qint64 smoothedRttMs() const { return m_clockEstimator.medianRttMs(); }
+    qint64 jitterMs() const { return m_clockEstimator.jitterMs(); }
+    qint64 clockOffsetMs() const { return m_clockEstimator.clockOffsetMs(); }
+    qint64 clockUncertaintyMs() const { return m_clockEstimator.uncertaintyMs(); }
+    qint64 scheduledLeadTimeMs() const;
+    qint64 currentRevision() const { return m_timeline.revision(); }
+    qint64 authoritativePositionMs() const;
+    qint64 actualPositionMs() const;
+    qint64 signedDriftMs() const { return m_driftController.lastSignedDriftMs(); }
+    double currentPlaybackRate() const;
+    QString activeCorrectionMode() const { return driftCorrectionModeToString(m_driftController.lastMode()); }
+
+    SyncDiagnostics diagnostics() const;
+    Q_INVOKABLE QVariantMap diagnosticsMap() const { return diagnostics().toVariantMap(); }
+
+    // Engine & testability hooks
+    void setMonotonicClock(std::shared_ptr<MonotonicClock> clock);
+    std::shared_ptr<MonotonicClock> monotonicClock() const { return m_clock; }
+
+    void setUseScheduledLeadTime(bool enabled) { m_useScheduledLeadTime = enabled; }
+    bool useScheduledLeadTime() const { return m_useScheduledLeadTime; }
+
+    const AuthoritativeTimeline &timeline() const { return m_timeline; }
+    const ClockEstimator &clockEstimator() const { return m_clockEstimator; }
+    ClockEstimator &clockEstimator() { return m_clockEstimator; }
+    const ActionScheduler &scheduler() const { return m_scheduler; }
+    const AdaptiveDriftController &driftController() const { return m_driftController; }
+    AdaptiveDriftController &driftController() { return m_driftController; }
+
+    ParticipantReadiness localReadiness() const { return m_localReadiness; }
+    ParticipantReadiness peerReadiness(const QString &peerId) const {
+        return m_peerReadiness.value(peerId, ParticipantReadiness::Idle);
+    }
+
+    // Explicit tick drivers (called by timers in production, or deterministically in tests)
+    void sendClockPing();
+    void processScheduledActions();
+    void evaluateDriftTick();
+    void stepSimulation();
+
 signals:
     void watchingChanged();
     void currentMediaChanged();
+    void diagnosticsChanged();
 
     // Another member opened (or you are catching up with) a video: open it in the UI
     void remoteOpenRequested(const QString &url, const QString &title, qint64 startMs);
@@ -81,42 +139,79 @@ signals:
     void activity(const QString &text);
 
 private:
+    class ScopedInternalAction {
+    public:
+        explicit ScopedInternalAction(int &depth) : m_depth(depth) { ++m_depth; }
+        ~ScopedInternalAction() { --m_depth; }
+    private:
+        int &m_depth;
+    };
+
     void onEvent(const QString &type, const QVariantMap &data, const QString &from);
     void onUserToggledPlay(bool playing, qint64 timeMs);
     void onUserSeeked(qint64 timeMs);
     void onPlayerStateChanged();
+    void onPlayerBufferingChanged();
     void onSessionStateChanged();
+    void onAuthorityChanged(const QString &authorityMemberId, bool localIsAuthority);
 
-    void handleOpen(const QVariantMap &data);
-    void handleState(const QVariantMap &data);
+    void handleOpen(const QVariantMap &data, const QString &from);
+    void handleState(const QVariantMap &data, const QString &from);
+    void handlePlaybackTransition(const QString &type, const QVariantMap &data, const QString &from);
+    void handleTimeSync(const QVariantMap &data, const QString &from);
+    void handleReadiness(const QVariantMap &data, const QString &from);
+
+    void executeScheduledAction(const ScheduledAction &action);
+    void updateScheduleTimer();
+    void updateLocalReadiness(bool allowBroadcast = true);
+
     // Bring the local player to (timeMs, playing); a non-empty note is shown as an on-screen notice
-    void align(qint64 timeMs, bool playing, const QString &note);
-    void applySeek(qint64 timeMs);
+    void align(qint64 timeMs, bool playing, const QString &note,
+               ActionOrigin origin = ActionOrigin::ScheduledRemote);
+    void applySeek(qint64 timeMs, const QString &note = QString(),
+                   ActionOrigin origin = ActionOrigin::ScheduledRemote);
 
     void sendState();
     void flushSeek();
     void armNeedState();
-    void noteOpen(const QString &url, const QString &title);
+    void noteOpen(const QString &url, const QString &title, qint64 rev, qint64 hostTimestampMs,
+                  const QString &authorId);
     void resetParty();
     bool playerRunning() const;
     qint64 partyTimeMs() const;
+    qint64 localNowMs() const;
+    qint64 estimatedHostNowMs() const;
     static QString formatTime(qint64 ms);
 
     TelepartySession *m_session = nullptr;
     VLCPlayer *m_player = nullptr;
     MediaLibraryModel m_catalog;
 
+    std::shared_ptr<MonotonicClock> m_clock;
+    AuthoritativeTimeline m_timeline;
+    ClockEstimator m_clockEstimator;
+    ActionScheduler m_scheduler;
+    AdaptiveDriftController m_driftController;
+
     bool m_watching = false;
+    int m_internalActionDepth = 0;
+    bool m_rateControlSupported = true;
+    bool m_useScheduledLeadTime = false;
 
     // The video the whole party is on (empty = none yet)
     QString m_currentUrl;
     QString m_currentTitle;
 
-    // Live party playback tracking (so a late joiner knows the party's current position)
+    // Fallback tracking when timeline is not yet anchored
     qint64 m_partyTimeMs = 0;
     qint64 m_partyDurationMs = 0;
     bool m_partyPlaying = true;
-    QElapsedTimer m_partyClock;
+    qint64 m_partyUpdatedLocalMs = 0;
+
+    // Re-anchoring state if "state" arrived before the first clock-sync sample locked
+    bool m_reanchorStateOnFirstClockLock = false;
+    qint64 m_rawStateHostTimestampMs = 0;
+    qint64 m_rawStateBasePositionMs = 0;
 
     // Two members can open the same next episode at the same moment (autoplay); the second
     // "open" for the same URL within a few seconds is ignored
@@ -131,7 +226,7 @@ private:
     bool m_pendingSync = false;
     qint64 m_pendingTimeMs = 0;
     bool m_pendingPlaying = true;
-    QElapsedTimer m_pendingClock;
+    qint64 m_pendingStartedLocalMs = 0;
 
     // Post-buffer alignment after a shared "open" so initial buffering differences cancel out
     bool m_syncOnPlay = false;
@@ -141,6 +236,19 @@ private:
     QTimer m_seekTimer;
     bool m_hasPendingSeek = false;
     qint64 m_pendingSeekMs = 0;
+
+    // Periodic timers for adaptive drift evaluation, clock sync, and future action execution
+    QTimer m_driftTimer;
+    QTimer m_clockSyncTimer;
+    QTimer m_scheduleTimer;
+
+    qint64 m_lastDriftTickLocalMs = 0;
+    qint64 m_lastClockPingLocalMs = 0;
+    qint64 m_lastSoftLogLocalMs = 0;
+    qint64 m_lastReadinessSentLocalMs = 0;
+
+    ParticipantReadiness m_localReadiness = ParticipantReadiness::Idle;
+    QHash<QString, ParticipantReadiness> m_peerReadiness;
 
     QString m_prevSessionState;
 };

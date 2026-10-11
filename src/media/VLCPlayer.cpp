@@ -540,6 +540,31 @@ void VLCPlayer::play(const QString &mediaUrl) {
         return;
     }
 
+    if (std::abs(m_playbackRate - 1.0) > 0.0005) {
+        m_playbackRate = 1.0;
+        emit playbackRateChanged();
+    }
+
+    if (m_simulatedMode) {
+        const qint64 startMs = m_startTimeMs;
+        m_startTimeMs = 0;
+        m_hasPendingSeek = false;
+        m_simulatedSubMsRemainder = 0.0;
+        m_timeMs = std::max<qint64>(0, startMs);
+        if (m_durationMs <= 0) m_durationMs = 7200000;
+        m_position = static_cast<qreal>(m_timeMs) / static_cast<qreal>(m_durationMs);
+        m_simulatedSeekGuardUntilMs = (startMs > 1000) ? (m_simulatedClockMs + 700) : 0;
+        m_state = QStringLiteral("Opening");
+        m_isBuffering = true;
+        m_bufferingPercent = 0.0f;
+        m_errorMessage.clear();
+        emit timeChanged();
+        emit positionChanged();
+        emit stateChanged();
+        emit bufferingChanged();
+        return;
+    }
+
     auto *vlc = VLCInstance::instance().get();
     if (!vlc || !m_mediaPlayer) {
         FLUX_LOG_ERROR("VLCPlayer", "Cannot play: libVLC not initialized");
@@ -588,6 +613,7 @@ void VLCPlayer::play(const QString &mediaUrl) {
     }
 
     libvlc_media_player_set_media(m_mediaPlayer, m_currentMedia);
+    libvlc_media_player_set_rate(m_mediaPlayer, 1.0f);
 
     // A new stream starts fresh: drop any seek still queued for the previous one
     m_hasPendingSeek = false;
@@ -623,6 +649,17 @@ void VLCPlayer::play(const QString &mediaUrl) {
 }
 
 void VLCPlayer::pause() {
+    if (std::abs(m_playbackRate - 1.0) > 0.0005) {
+        remoteSetRate(1.0);
+    }
+    if (m_simulatedMode) {
+        if (m_state == QLatin1String("Playing") || m_state.startsWith(QLatin1String("Buffering")) || m_state == QLatin1String("Opening")) {
+            m_state = QStringLiteral("Paused");
+            m_isBuffering = false;
+            emit stateChanged();
+        }
+        return;
+    }
     if (!m_mediaPlayer) return;
     libvlc_state_t st = libvlc_media_player_get_state(m_mediaPlayer);
     if (st == libvlc_Playing || st == libvlc_Buffering || st == libvlc_Opening) {
@@ -638,6 +675,14 @@ void VLCPlayer::pause() {
 }
 
 void VLCPlayer::resume() {
+    if (m_simulatedMode) {
+        if (m_state == QLatin1String("Paused")) {
+            m_state = QStringLiteral("Playing");
+            m_isBuffering = false;
+            emit stateChanged();
+        }
+        return;
+    }
     if (m_mediaPlayer && isPaused()) {
         endSeekMute();
         libvlc_media_player_set_pause(m_mediaPlayer, 0);
@@ -647,6 +692,19 @@ void VLCPlayer::resume() {
 }
 
 void VLCPlayer::togglePlay() {
+    if (m_simulatedMode) {
+        if (m_state == QLatin1String("Playing") || m_state.startsWith(QLatin1String("Buffering")) || m_state == QLatin1String("Opening")) {
+            pause();
+            if (m_quiet == 0) emit userToggledPlay(false, m_timeMs);
+        } else if (m_state == QLatin1String("Paused")) {
+            resume();
+            if (m_quiet == 0) emit userToggledPlay(true, m_timeMs);
+        } else if (!m_url.isEmpty()) {
+            play();
+            if (m_quiet == 0) emit userToggledPlay(true, 0);
+        }
+        return;
+    }
     if (!m_mediaPlayer) return;
 
     // Decide from libVLC's real state. The old check (isPlaying() == false => play())
@@ -667,7 +725,24 @@ void VLCPlayer::togglePlay() {
 
 void VLCPlayer::stop() {
     endSeekMute();
+    if (std::abs(m_playbackRate - 1.0) > 0.0005) {
+        m_playbackRate = 1.0;
+        emit playbackRateChanged();
+    }
+    if (m_simulatedMode) {
+        m_state = QStringLiteral("Stopped");
+        m_isBuffering = false;
+        m_timeMs = 0;
+        m_position = 0.0;
+        m_simulatedSubMsRemainder = 0.0;
+        emit stateChanged();
+        emit bufferingChanged();
+        emit timeChanged();
+        emit positionChanged();
+        return;
+    }
     if (m_mediaPlayer) {
+        libvlc_media_player_set_rate(m_mediaPlayer, 1.0f);
         libvlc_media_player_stop(m_mediaPlayer);
     }
     m_pollTimer->stop();
@@ -682,11 +757,25 @@ void VLCPlayer::stop() {
 }
 
 bool VLCPlayer::seekGuardActive() const {
+    if (m_simulatedMode) {
+        return m_simulatedClockMs < m_simulatedSeekGuardUntilMs;
+    }
     return m_uptime.isValid() && m_uptime.elapsed() < m_seekGuardUntil;
 }
 
+bool VLCPlayer::isSeekable() const {
+    if (m_simulatedMode) {
+        return m_simulatedSeekable;
+    }
+    return m_mediaPlayer && (libvlc_media_player_is_seekable(m_mediaPlayer) != 0);
+}
+
+bool VLCPlayer::isSeekSettling() const {
+    return seekGuardActive() || m_hasPendingSeek || m_seekMuted;
+}
+
 void VLCPlayer::seek(qreal pos) {
-    if (!m_mediaPlayer) return;
+    if (!m_mediaPlayer && !m_simulatedMode) return;
     pos = std::clamp(pos, 0.0, 1.0);
 
     m_pendingIsTime = false;
@@ -713,7 +802,7 @@ void VLCPlayer::seek(qreal pos) {
 }
 
 void VLCPlayer::seekRelative(qint64 deltaMs) {
-    if (!m_mediaPlayer) return;
+    if (!m_mediaPlayer && !m_simulatedMode) return;
 
     // m_timeMs already includes any seek that is still pending, so repeated presses
     // accumulate (e.g. 6 presses of +10s become a single +60s seek).
@@ -743,7 +832,7 @@ void VLCPlayer::seekRelative(qint64 deltaMs) {
 }
 
 void VLCPlayer::applyPendingSeek() {
-    if (!m_hasPendingSeek || !m_mediaPlayer) {
+    if (!m_hasPendingSeek || (!m_mediaPlayer && !m_simulatedMode)) {
         m_hasPendingSeek = false;
         return;
     }
@@ -758,6 +847,11 @@ void VLCPlayer::applyPendingSeek() {
             ? m_pendingTimeMs
             : static_cast<qint64>(m_pendingPos * static_cast<qreal>(m_durationMs));
         if (m_pendingIsTime || m_durationMs > 0) emit userSeeked(target);
+    }
+
+    if (m_simulatedMode) {
+        m_simulatedSeekGuardUntilMs = m_simulatedClockMs + 700;
+        return;
     }
 
     if (m_pendingIsTime) {
@@ -800,16 +894,23 @@ void VLCPlayer::endSeekMute() {
 }
 
 bool VLCPlayer::isPlaying() const {
+    if (m_simulatedMode) {
+        return m_state == QLatin1String("Playing");
+    }
     return m_mediaPlayer && libvlc_media_player_is_playing(m_mediaPlayer);
 }
 
 bool VLCPlayer::isPaused() const {
+    if (m_simulatedMode) {
+        return m_state == QLatin1String("Paused");
+    }
     if (!m_mediaPlayer) return false;
     libvlc_state_t st = libvlc_media_player_get_state(m_mediaPlayer);
     return (st == libvlc_Paused || m_state == "Paused");
 }
 
 qreal VLCPlayer::position() const {
+    if (m_simulatedMode) return m_position;
     if (!m_mediaPlayer) return 0.0;
     if (seekGuardActive()) return m_position;   // our own value is newer than libVLC's
     float p = libvlc_media_player_get_position(m_mediaPlayer);
@@ -917,7 +1018,7 @@ void VLCPlayer::remoteResume() {
 }
 
 void VLCPlayer::remoteSeekTo(qint64 timeMs) {
-    if (!m_mediaPlayer) return;
+    if (!m_mediaPlayer && !m_simulatedMode) return;
 
     qint64 newTime = std::max<qint64>(0, timeMs);
     if (m_durationMs > 1000) {
@@ -927,6 +1028,22 @@ void VLCPlayer::remoteSeekTo(qint64 timeMs) {
     if (m_seekTimer) m_seekTimer->stop();
     m_hasPendingSeek = false;
     m_pendingNotify = false;
+
+    if (m_simulatedMode) {
+        if (!m_simulatedSeekable) return;
+        if (m_simulatedKeyframeStepMs > 0) {
+            newTime = ((newTime + m_simulatedKeyframeStepMs / 2) / m_simulatedKeyframeStepMs) * m_simulatedKeyframeStepMs;
+        }
+        m_timeMs = newTime;
+        m_simulatedSubMsRemainder = 0.0;
+        if (m_durationMs > 0) {
+            m_position = static_cast<qreal>(newTime) / static_cast<qreal>(m_durationMs);
+        }
+        m_simulatedSeekGuardUntilMs = m_simulatedClockMs + 700;
+        emit timeChanged();
+        emit positionChanged();
+        return;
+    }
 
     m_timeMs = newTime;
     if (m_durationMs > 0) {
@@ -946,6 +1063,125 @@ void VLCPlayer::remoteRestart(qint64 startMs) {
     ++m_quiet;
     playFrom(m_url, startMs);
     --m_quiet;
+}
+
+bool VLCPlayer::remoteSetRate(double rate) {
+    if (!std::isfinite(rate)) return false;
+    const double clamped = std::clamp(rate, 0.5, 2.0);
+
+    if (m_simulatedMode) {
+        if (!m_simulatedRateSupported) {
+            return false;
+        }
+        if (std::abs(m_playbackRate - clamped) > 0.0005) {
+            m_playbackRate = clamped;
+            emit playbackRateChanged();
+        }
+        return true;
+    }
+
+    if (!m_mediaPlayer) return false;
+    if (std::abs(m_playbackRate - clamped) < 0.0005) {
+        return true;
+    }
+
+    const int rc = libvlc_media_player_set_rate(m_mediaPlayer, static_cast<float>(clamped));
+    if (rc != 0) {
+        FLUX_LOG_WARN("VLCPlayer", QString("libVLC rejected playback rate %1").arg(clamped, 0, 'f', 3));
+        return false;
+    }
+
+    m_playbackRate = clamped;
+    emit playbackRateChanged();
+    return true;
+}
+
+void VLCPlayer::setSimulatedMode(bool enabled) {
+    m_simulatedMode = enabled;
+    if (enabled && m_pollTimer) {
+        m_pollTimer->stop();
+    }
+}
+
+void VLCPlayer::setSimulatedState(const QString &state, qint64 timeMs, qint64 durationMs,
+                                  bool buffering, float bufferPct) {
+    m_simulatedMode = true;
+    const bool stateDiff = (m_state != state);
+    const bool bufDiff = (m_isBuffering != buffering || std::abs(m_bufferingPercent - bufferPct) > 0.1f);
+    const bool timeDiff = (m_timeMs != timeMs);
+    const bool durDiff = (m_durationMs != durationMs);
+
+    m_state = state;
+    m_isBuffering = buffering;
+    m_bufferingPercent = bufferPct;
+    m_timeMs = std::max<qint64>(0, timeMs);
+    m_durationMs = std::max<qint64>(0, durationMs);
+    m_simulatedSubMsRemainder = 0.0;
+    if (m_durationMs > 0) {
+        m_position = static_cast<qreal>(m_timeMs) / static_cast<qreal>(m_durationMs);
+    }
+
+    if (durDiff) emit durationChanged();
+    if (timeDiff) {
+        emit timeChanged();
+        emit positionChanged();
+    }
+    if (bufDiff) emit bufferingChanged();
+    if (stateDiff) emit stateChanged();
+}
+
+void VLCPlayer::advanceSimulatedTime(qint64 elapsedRealMs) {
+    if (!m_simulatedMode || elapsedRealMs <= 0) return;
+    m_simulatedClockMs += elapsedRealMs;
+
+    if (m_state == QLatin1String("Playing") && !m_isBuffering) {
+        const double exactDelta = static_cast<double>(elapsedRealMs) * m_playbackRate + m_simulatedSubMsRemainder;
+        const qint64 wholeMs = static_cast<qint64>(std::floor(exactDelta));
+        m_simulatedSubMsRemainder = exactDelta - static_cast<double>(wholeMs);
+        m_timeMs += wholeMs;
+        if (m_durationMs > 0 && m_timeMs >= m_durationMs) {
+            m_timeMs = m_durationMs;
+            m_state = QStringLiteral("Ended");
+            emit timeChanged();
+            emit stateChanged();
+            return;
+        }
+        if (m_durationMs > 0) {
+            m_position = static_cast<qreal>(m_timeMs) / static_cast<qreal>(m_durationMs);
+        }
+        emit timeChanged();
+    }
+}
+
+void VLCPlayer::simulateUserTogglePlay(bool playing) {
+    if (!m_simulatedMode) return;
+    if (playing) {
+        m_state = QStringLiteral("Playing");
+        m_isBuffering = false;
+    } else {
+        m_state = QStringLiteral("Paused");
+        m_isBuffering = false;
+        m_playbackRate = 1.0;
+    }
+    emit stateChanged();
+    if (m_quiet == 0) {
+        emit userToggledPlay(playing, m_timeMs);
+    }
+}
+
+void VLCPlayer::simulateUserSeek(qint64 targetMs) {
+    if (!m_simulatedMode) return;
+    m_timeMs = std::max<qint64>(0, targetMs);
+    m_simulatedSubMsRemainder = 0.0;
+    if (m_durationMs > 0) {
+        m_position = static_cast<qreal>(m_timeMs) / static_cast<qreal>(m_durationMs);
+    }
+    m_simulatedSeekGuardUntilMs = m_simulatedClockMs + 700;
+    emit timeChanged();
+    emit positionChanged();
+    if (m_quiet == 0) {
+        emit userSeeked(m_timeMs);
+    }
 }
 
 void VLCPlayer::setLanguagePreferences(const QStringList &audio, const QString &subtitle) {

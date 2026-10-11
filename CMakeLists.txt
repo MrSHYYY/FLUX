@@ -61,6 +61,8 @@ qt_add_executable(FLUX WIN32
     src/downloads/DownloadManager.cpp
     src/teleparty/SyncplayClient.h
     src/teleparty/SyncplayClient.cpp
+    src/teleparty/TelepartyEngine.h
+    src/teleparty/TelepartyEngine.cpp
     src/teleparty/TelepartySession.h
     src/teleparty/TelepartySession.cpp
     src/teleparty/TelepartySync.h
@@ -233,6 +235,8 @@ add_executable(flux_test_teleparty
     tests/test_teleparty.cpp
     src/teleparty/SyncplayClient.h
     src/teleparty/SyncplayClient.cpp
+    src/teleparty/TelepartyEngine.h
+    src/teleparty/TelepartyEngine.cpp
     src/teleparty/TelepartySession.h
     src/teleparty/TelepartySession.cpp
     src/teleparty/TelepartySync.h
@@ -252,5 +256,33 @@ target_link_libraries(flux_test_teleparty PRIVATE
     Qt6::Network
     ${VLC_LIBRARIES}
 )
+
+# Standalone deterministic test suite for the adaptive synchronization engine
+add_executable(flux_test_sync_engine
+    tests/test_sync_engine.cpp
+    src/teleparty/SyncplayClient.h
+    src/teleparty/SyncplayClient.cpp
+    src/teleparty/TelepartyEngine.h
+    src/teleparty/TelepartyEngine.cpp
+    src/teleparty/TelepartySession.h
+    src/teleparty/TelepartySession.cpp
+    src/teleparty/TelepartySync.h
+    src/teleparty/TelepartySync.cpp
+    src/search/MediaLibrary.h
+    src/search/MediaLibrary.cpp
+    src/media/VLCInstance.h
+    src/media/VLCInstance.cpp
+    src/media/VLCPlayer.h
+    src/media/VLCPlayer.cpp
+    src/core/Logger.h
+    src/core/Logger.cpp
+)
+target_link_libraries(flux_test_sync_engine PRIVATE
+    Qt6::Core
+    Qt6::Gui
+    Qt6::Network
+    ${VLC_LIBRARIES}
+)
+
 
 

@@ -3,9 +3,10 @@
 #include "../media/VLCPlayer.h"
 #include "../core/Logger.h"
 
-#include <QDateTime>
 #include <QUrl>
 #include <algorithm>
+#include <cmath>
+#include <cstdlib>
 
 namespace Flux {
 
@@ -13,12 +14,13 @@ namespace {
 
 constexpr int kMaxUrlLength = 2048;
 constexpr int kMaxTitleLength = 300;
-constexpr qint64 kOpenDedupeMs = 8000;     // same video opened twice within this = one open
-constexpr int kSeekMergeMs = 40;           // VLCPlayer already coalesces local seeks; keep this minimal
-constexpr int kStateWaitMs = 5000;         // how long we accept a "state" answer after asking
-constexpr qint64 kPlayDriftMs = 800;       // playing: ignore drift smaller than this
-constexpr qint64 kPauseDriftMs = 400;      // paused: everybody should show the same frame
-constexpr qint64 kCatchUpDriftMs = 800;
+constexpr qint64 kOpenDedupeMs = 8000;       // same video opened twice within this = one open
+constexpr int kSeekMergeMs = 40;             // VLCPlayer already coalesces local seeks; keep this minimal
+constexpr int kStateWaitMs = 5000;           // how long we accept a "state" answer after asking
+constexpr int kDriftTickIntervalMs = 500;    // periodic drift evaluation cadence
+constexpr qint64 kCatchUpDriftMs = 650;      // initial join catch-up seek threshold
+constexpr qint64 kSoftLogCooldownMs = 2000;  // rate-limit soft drift logs
+constexpr qint64 kReadinessMinIntervalMs = 800;
 
 struct BuiltinCatalogEntry {
     const char *id;
@@ -44,15 +46,10 @@ constexpr BuiltinCatalogEntry kBuiltinCatalog[] = {
     }
 };
 
-qint64 nowMs() {
-    return QDateTime::currentMSecsSinceEpoch();
-}
-
 qint64 cleanTime(const QVariant &v) {
     // Positions come from other machines: never trust them blindly
     const qint64 t = v.toLongLong();
-    constexpr qint64 kMaxMs = 48LL * 3600 * 1000;
-    return std::clamp<qint64>(t, 0, kMaxMs);
+    return AuthoritativeTimeline::sanitizePositionMs(t);
 }
 
 bool hasUnsafeCharactersOrTraversal(const QString &str) {
@@ -97,7 +94,8 @@ TelepartySync::TelepartySync(TelepartySession *session, VLCPlayer *player, QObje
     : QObject(parent)
     , m_session(session)
     , m_player(player)
-    , m_catalog(this) {
+    , m_catalog(this)
+    , m_clock(std::make_shared<SystemMonotonicClock>()) {
 
     m_stateTimer.setSingleShot(true);
     connect(&m_stateTimer, &QTimer::timeout, this, [this]() { m_needState = false; });
@@ -106,16 +104,39 @@ TelepartySync::TelepartySync(TelepartySession *session, VLCPlayer *player, QObje
     m_seekTimer.setInterval(kSeekMergeMs);
     connect(&m_seekTimer, &QTimer::timeout, this, &TelepartySync::flushSeek);
 
+    m_driftTimer.setInterval(kDriftTickIntervalMs);
+    connect(&m_driftTimer, &QTimer::timeout, this, &TelepartySync::evaluateDriftTick);
+
+    m_clockSyncTimer.setInterval(1500);
+    connect(&m_clockSyncTimer, &QTimer::timeout, this, &TelepartySync::sendClockPing);
+
+    m_scheduleTimer.setSingleShot(true);
+    connect(&m_scheduleTimer, &QTimer::timeout, this, &TelepartySync::processScheduledActions);
+
     // Session -> player
     if (m_session) {
         connect(m_session, &TelepartySession::eventReceived, this, &TelepartySync::onEvent);
         connect(m_session, &TelepartySession::stateChanged, this, &TelepartySync::onSessionStateChanged);
+        connect(m_session, &TelepartySession::authorityChanged, this, &TelepartySync::onAuthorityChanged);
+        connect(m_session, &TelepartySession::memberLeft, this, [this](const QString &peerId) {
+            m_peerReadiness.remove(peerId);
+        });
         connect(m_session, &TelepartySession::memberJoined, this, [this](const QString &) {
             // Someone (re)joined: tell them what we are watching
             sendState();
         });
         connect(m_session, &TelepartySession::joinedSession, this, [this]() {
             resetParty();
+            m_clockEstimator.reset(m_session->isHost(), m_session->hostMemberId());
+
+            if (m_player) {
+                m_driftTimer.start();
+                if (!m_session->isHost()) {
+                    m_clockSyncTimer.start(m_clockEstimator.recommendedPingIntervalMs());
+                    sendClockPing();
+                }
+            }
+
             // A newcomer learns what the party is watching from the members' answers
             if (!m_session->isHost()) {
                 armNeedState();
@@ -129,7 +150,24 @@ TelepartySync::TelepartySync(TelepartySession *session, VLCPlayer *player, QObje
         connect(m_player, &VLCPlayer::userToggledPlay, this, &TelepartySync::onUserToggledPlay);
         connect(m_player, &VLCPlayer::userSeeked, this, &TelepartySync::onUserSeeked);
         connect(m_player, &VLCPlayer::stateChanged, this, &TelepartySync::onPlayerStateChanged);
+        connect(m_player, &VLCPlayer::bufferingChanged, this, &TelepartySync::onPlayerBufferingChanged);
     }
+}
+
+void TelepartySync::setMonotonicClock(std::shared_ptr<MonotonicClock> clock) {
+    if (clock) {
+        m_clock = std::move(clock);
+    } else {
+        m_clock = std::make_shared<SystemMonotonicClock>();
+    }
+}
+
+qint64 TelepartySync::localNowMs() const {
+    return m_clock ? m_clock->nowMs() : 0;
+}
+
+qint64 TelepartySync::estimatedHostNowMs() const {
+    return m_clockEstimator.estimatedHostTimeMs(localNowMs());
 }
 
 // ============================================================================
@@ -308,13 +346,17 @@ void TelepartySync::broadcastOpen(const QString &url, const QString &title) {
     if (movieId.isEmpty()) return;
 
     flushSeek();
-    noteOpen(url, title.left(kMaxTitleLength));
+    const qint64 rev = m_timeline.nextRevision();
+    const qint64 hostNow = estimatedHostNowMs();
+    noteOpen(url, title.left(kMaxTitleLength), rev, hostNow, m_session->memberId());
     m_announceOnPlay = true;
     m_needState = false;
     m_stateTimer.stop();
 
     QVariantMap d;
     d.insert(QStringLiteral("id"), movieId);
+    d.insert(QStringLiteral("rev"), rev);
+    d.insert(QStringLiteral("ht"), hostNow);
     if (!isBuiltinCatalogId(movieId) && !m_currentTitle.isEmpty()) {
         d.insert(QStringLiteral("n"), m_currentTitle);
     }
@@ -323,13 +365,33 @@ void TelepartySync::broadcastOpen(const QString &url, const QString &title) {
 
 void TelepartySync::adoptCurrent(const QString &url, const QString &title) {
     if (!m_session || !m_session->active() || !isStreamUrl(url)) return;
+    const QString movieId = encodeCatalogMovieId(url);
+    if (movieId.isEmpty()) return;
+
     m_currentUrl = url;
     m_currentTitle = title.left(kMaxTitleLength);
     m_partyTimeMs = m_player ? m_player->timeMs() : 0;
     m_partyDurationMs = m_player ? m_player->durationMs() : 0;
     m_partyPlaying = playerRunning();
-    m_partyClock.start();
+    m_partyUpdatedLocalMs = localNowMs();
+
+    TimelineSnapshot snap;
+    snap.sessionId = m_session->code();
+    snap.revision = m_timeline.nextRevision();
+    snap.authorId = m_session->memberId();
+    snap.mediaId = movieId;
+    snap.mediaUrl = m_currentUrl;
+    snap.mediaTitle = m_currentTitle;
+    snap.durationMs = m_partyDurationMs;
+    snap.basePositionMs = m_partyTimeMs;
+    snap.hostTimestampMs = estimatedHostNowMs();
+    snap.playing = m_partyPlaying;
+    snap.playbackRate = m_player ? m_player->playbackRate() : 1.0;
+    snap.valid = true;
+    m_timeline.forceUpdate(snap);
+
     emit currentMediaChanged();
+    emit diagnosticsChanged();
 }
 
 void TelepartySync::joinPartyPlayback() {
@@ -338,8 +400,8 @@ void TelepartySync::joinPartyPlayback() {
     const qint64 startMs = partyTimeMs();
     m_pendingSync = true;
     m_pendingTimeMs = startMs;
-    m_pendingPlaying = m_partyPlaying;
-    m_pendingClock.start();
+    m_pendingPlaying = m_timeline.isValid() ? m_timeline.snapshot().playing : m_partyPlaying;
+    m_pendingStartedLocalMs = localNowMs();
 
     armNeedState();
     m_session->sendEvent(QStringLiteral("syncme"));
@@ -350,37 +412,71 @@ void TelepartySync::joinPartyPlayback() {
 }
 
 // ============================================================================
-// Local user -> everyone else
+// Local user -> everyone else (ActionOrigin::LocalUser only)
 // ============================================================================
 
 void TelepartySync::onUserToggledPlay(bool playing, qint64 timeMs) {
+    // Prevent feedback loops: remote scheduled actions, drift corrections, and buffer
+    // recoveries never broadcast outbound events.
+    if (m_internalActionDepth > 0) return;
     if (!m_session || !m_session->active()) return;
+
     if (m_currentUrl.isEmpty() && m_player && isStreamUrl(m_player->url())) {
         m_currentUrl = m_player->url();
         emit currentMediaChanged();
     }
     if (m_currentUrl.isEmpty()) return;
 
-    m_partyTimeMs = qMax<qint64>(0, timeMs);
-    m_partyPlaying = playing;
-    m_partyClock.start();
-
     flushSeek(); // keep the order the user performed things in
+
+    const qint64 posMs = AuthoritativeTimeline::sanitizePositionMs(timeMs, m_partyDurationMs);
+    const qint64 localNow = localNowMs();
+    const qint64 hostNow = estimatedHostNowMs();
+    const qint64 leadMs = m_useScheduledLeadTime ? scheduledLeadTimeMs() : 0;
+    const qint64 targetHostMs = hostNow + leadMs;
+    const qint64 rev = m_timeline.nextRevision();
+
+    m_partyTimeMs = posMs;
+    m_partyPlaying = playing;
+    m_partyUpdatedLocalMs = localNow;
+
+    TimelineSnapshot snap = m_timeline.snapshot();
+    snap.sessionId = m_session->code();
+    snap.revision = rev;
+    snap.authorId = m_session->memberId();
+    if (snap.mediaId.isEmpty()) snap.mediaId = encodeCatalogMovieId(m_currentUrl);
+    snap.mediaUrl = m_currentUrl;
+    snap.mediaTitle = m_currentTitle;
+    if (m_player && m_player->durationMs() > 0) snap.durationMs = m_player->durationMs();
+    snap.basePositionMs = posMs;
+    snap.hostTimestampMs = targetHostMs;
+    snap.playing = playing;
+    snap.playbackRate = 1.0;
+    snap.valid = true;
+    m_timeline.forceUpdate(snap);
+    m_scheduler.cancelSuperseded(rev);
+
     QVariantMap d;
-    d.insert(QStringLiteral("t"), m_partyTimeMs);
+    d.insert(QStringLiteral("t"), posMs);
+    d.insert(QStringLiteral("rev"), rev);
+    d.insert(QStringLiteral("ht"), targetHostMs);
     m_session->sendEvent(playing ? QStringLiteral("play") : QStringLiteral("pause"), d);
+    emit diagnosticsChanged();
 }
 
 void TelepartySync::onUserSeeked(qint64 timeMs) {
+    if (m_internalActionDepth > 0) return;
     if (!m_session || !m_session->active()) return;
+
     if (m_currentUrl.isEmpty() && m_player && isStreamUrl(m_player->url())) {
         m_currentUrl = m_player->url();
         emit currentMediaChanged();
     }
     if (m_currentUrl.isEmpty()) return;
 
-    m_partyTimeMs = qMax<qint64>(0, timeMs);
-    m_partyClock.start();
+    m_partyTimeMs = AuthoritativeTimeline::sanitizePositionMs(timeMs, m_partyDurationMs);
+    m_partyUpdatedLocalMs = localNowMs();
+    m_driftController.notifyExternalSeek(m_partyUpdatedLocalMs, m_partyTimeMs);
 
     m_pendingSeekMs = m_partyTimeMs;
     m_hasPendingSeek = true;
@@ -393,13 +489,42 @@ void TelepartySync::flushSeek() {
     m_hasPendingSeek = false;
 
     if (!m_session || !m_session->active() || m_currentUrl.isEmpty()) return;
+
+    const qint64 posMs = AuthoritativeTimeline::sanitizePositionMs(m_pendingSeekMs, m_partyDurationMs);
+    const qint64 hostNow = estimatedHostNowMs();
+    const qint64 leadMs = m_useScheduledLeadTime ? scheduledLeadTimeMs() : 0;
+    const qint64 targetHostMs = hostNow + leadMs;
+    const qint64 rev = m_timeline.nextRevision();
+
+    TimelineSnapshot snap = m_timeline.snapshot();
+    snap.sessionId = m_session->code();
+    snap.revision = rev;
+    snap.authorId = m_session->memberId();
+    if (snap.mediaId.isEmpty()) snap.mediaId = encodeCatalogMovieId(m_currentUrl);
+    snap.mediaUrl = m_currentUrl;
+    snap.mediaTitle = m_currentTitle;
+    if (m_player && m_player->durationMs() > 0) snap.durationMs = m_player->durationMs();
+    snap.basePositionMs = posMs;
+    snap.hostTimestampMs = targetHostMs;
+    snap.playing = m_timeline.isValid() ? m_timeline.snapshot().playing : m_partyPlaying;
+    snap.playbackRate = 1.0;
+    snap.valid = true;
+    m_timeline.forceUpdate(snap);
+    m_scheduler.cancelSuperseded(rev);
+
     QVariantMap d;
-    d.insert(QStringLiteral("t"), m_pendingSeekMs);
+    d.insert(QStringLiteral("t"), posMs);
+    d.insert(QStringLiteral("rev"), rev);
+    d.insert(QStringLiteral("ht"), targetHostMs);
     m_session->sendEvent(QStringLiteral("seek"), d);
+    emit diagnosticsChanged();
 }
 
 void TelepartySync::sendState() {
     if (!m_session || !m_session->active() || !m_player) return;
+    if (m_hasPendingSeek) {
+        flushSeek();
+    }
     if (m_currentUrl.isEmpty() && isStreamUrl(m_player->url())
         && m_player->state() != QLatin1String("Idle") && m_player->state() != QLatin1String("Stopped")) {
         m_currentUrl = m_player->url();
@@ -413,54 +538,199 @@ void TelepartySync::sendState() {
     const QString movieId = encodeCatalogMovieId(m_currentUrl);
     if (movieId.isEmpty()) return;
 
+    const qint64 posMs = m_player->timeMs();
+    const qint64 durMs = m_player->durationMs();
+    const bool playing = playerRunning();
+    const qint64 hostNow = estimatedHostNowMs();
+    const qint64 rev = std::max<qint64>(1, m_timeline.revision());
+
+    if (!m_timeline.isValid() || m_session->isHost()) {
+        TimelineSnapshot snap = m_timeline.snapshot();
+        snap.sessionId = m_session->code();
+        snap.revision = rev;
+        snap.authorId = m_session->memberId();
+        snap.mediaId = movieId;
+        snap.mediaUrl = m_currentUrl;
+        snap.mediaTitle = m_currentTitle;
+        snap.durationMs = durMs;
+        snap.basePositionMs = posMs;
+        snap.hostTimestampMs = hostNow;
+        snap.playing = playing;
+        snap.playbackRate = 1.0;
+        snap.valid = true;
+        m_timeline.forceUpdate(snap);
+    }
+
     QVariantMap d;
     d.insert(QStringLiteral("id"), movieId);
     if (!isBuiltinCatalogId(movieId) && !m_currentTitle.isEmpty()) {
         d.insert(QStringLiteral("n"), m_currentTitle);
     }
-    d.insert(QStringLiteral("t"), m_player->timeMs());
-    d.insert(QStringLiteral("d"), m_player->durationMs());
-    d.insert(QStringLiteral("p"), playerRunning() ? 1 : 0);
+    d.insert(QStringLiteral("t"), posMs);
+    d.insert(QStringLiteral("d"), durMs);
+    d.insert(QStringLiteral("p"), playing ? 1 : 0);
+    d.insert(QStringLiteral("rev"), m_timeline.revision());
+    d.insert(QStringLiteral("ht"), hostNow);
     m_session->sendEvent(QStringLiteral("state"), d);
+}
+
+// ============================================================================
+// Clock Synchronization ("ts") & Participant Readiness ("rd")
+// ============================================================================
+
+void TelepartySync::sendClockPing() {
+    if (!m_session || !m_session->active() || m_session->isHost()) return;
+    if (m_session->memberCount() <= 1) return;
+
+    const qint64 t1 = localNowMs();
+    m_lastClockPingLocalMs = t1;
+    m_clockEstimator.registerOutgoingPing(t1);
+
+    QVariantMap d;
+    d.insert(QStringLiteral("q"), t1);
+    if (m_clockEstimator.medianRttMs() > 0) {
+        d.insert(QStringLiteral("l"), m_clockEstimator.medianRttMs());
+    }
+    m_session->sendEvent(QStringLiteral("ts"), d);
+}
+
+void TelepartySync::handleTimeSync(const QVariantMap &data, const QString &from) {
+    if (!m_session || !m_session->active()) return;
+
+    // 1. Incoming Pong (contains "r" = t2 and "s" = t3)
+    if (data.contains(QStringLiteral("r")) && data.contains(QStringLiteral("s"))) {
+        const QString targetPeer = data.value(QStringLiteral("p")).toString();
+        if (!targetPeer.isEmpty() && targetPeer != m_session->memberId()) {
+            return; // Pong addressed to a different participant
+        }
+        // Only accept time reference responses from the host / authority peer
+        const QString authPeer = m_session->hostMemberId();
+        if (!authPeer.isEmpty() && from != authPeer) {
+            return;
+        }
+
+        const qint64 t1 = data.value(QStringLiteral("q")).toLongLong();
+        const qint64 t2 = data.value(QStringLiteral("r")).toLongLong();
+        const qint64 t3 = data.value(QStringLiteral("s")).toLongLong();
+        const qint64 t4 = localNowMs();
+
+        const bool hadEstimateBefore = m_clockEstimator.hasEstimate();
+        if (m_clockEstimator.processSample(t1, t2, t3, t4)) {
+            // If a "state" snapshot arrived before our first clock sample locked,
+            // re-anchor the timeline to the exact host timestamp now!
+            if (!hadEstimateBefore && m_reanchorStateOnFirstClockLock && m_timeline.isValid()) {
+                m_reanchorStateOnFirstClockLock = false;
+                TimelineSnapshot snap = m_timeline.snapshot();
+                snap.basePositionMs = m_rawStateBasePositionMs;
+                snap.hostTimestampMs = m_rawStateHostTimestampMs;
+                m_timeline.forceUpdate(snap);
+            }
+
+            // Recalculate any pending scheduled transition timers with the refined clock offset
+            processScheduledActions();
+            updateScheduleTimer();
+
+            // Adapt ping interval (fast initial burst -> slower steady state)
+            if (m_clockSyncTimer.isActive()) {
+                m_clockSyncTimer.setInterval(m_clockEstimator.recommendedPingIntervalMs());
+            }
+            emit diagnosticsChanged();
+        }
+        return;
+    }
+
+    // 2. Incoming Ping (contains "q" = t1): Host / authority responds with (t1, t2, t3)
+    if (data.contains(QStringLiteral("q"))) {
+        const bool isAuthority = m_session->isHost() ||
+                                 (m_session->hostMemberId() == m_session->memberId());
+        if (!isAuthority) {
+            return;
+        }
+
+        const qint64 t2 = localNowMs();
+        const qint64 t1 = data.value(QStringLiteral("q")).toLongLong();
+        const qint64 reportedRtt = data.value(QStringLiteral("l"), 0).toLongLong();
+        if (reportedRtt > 0) {
+            m_clockEstimator.recordPeerRttSample(reportedRtt);
+        }
+
+        const qint64 t3 = localNowMs();
+        QVariantMap pong;
+        pong.insert(QStringLiteral("p"), from);
+        pong.insert(QStringLiteral("q"), t1);
+        pong.insert(QStringLiteral("r"), t2);
+        pong.insert(QStringLiteral("s"), t3);
+        m_session->sendEvent(QStringLiteral("ts"), pong);
+        emit diagnosticsChanged();
+    }
+}
+
+void TelepartySync::updateLocalReadiness(bool allowBroadcast) {
+    ParticipantReadiness next = ParticipantReadiness::Idle;
+    if (m_player && !m_currentUrl.isEmpty() && m_player->url() == m_currentUrl) {
+        const QString st = m_player->state();
+        if (st == QLatin1String("Error")) {
+            next = ParticipantReadiness::Error;
+        } else if (st == QLatin1String("Opening")) {
+            next = ParticipantReadiness::Opening;
+        } else if (m_player->isBuffering() || st.startsWith(QLatin1String("Buffering"))) {
+            next = ParticipantReadiness::Buffering;
+        } else if (m_player->isSeekSettling()) {
+            next = ParticipantReadiness::Seeking;
+        } else if (st == QLatin1String("Playing") || st == QLatin1String("Paused")) {
+            next = ParticipantReadiness::Ready;
+        }
+    }
+
+    if (next == m_localReadiness) {
+        return;
+    }
+    m_localReadiness = next;
+
+    if (!allowBroadcast || !m_session || !m_session->active() || m_session->memberCount() <= 1) {
+        return;
+    }
+
+    const qint64 now = localNowMs();
+    if (m_lastReadinessSentLocalMs > 0 && (now - m_lastReadinessSentLocalMs) < kReadinessMinIntervalMs
+        && next != ParticipantReadiness::Ready) {
+        return;
+    }
+    m_lastReadinessSentLocalMs = now;
+
+    QVariantMap d;
+    d.insert(QStringLiteral("s"), readinessToCode(m_localReadiness));
+    d.insert(QStringLiteral("t"), m_player ? m_player->timeMs() : 0);
+    d.insert(QStringLiteral("rev"), m_timeline.revision());
+    m_session->sendEvent(QStringLiteral("rd"), d);
+}
+
+void TelepartySync::handleReadiness(const QVariantMap &data, const QString &from) {
+    const QString code = data.value(QStringLiteral("s")).toString();
+    m_peerReadiness.insert(from, readinessFromCode(code));
 }
 
 // ============================================================================
 // Everyone else -> local player
 // ============================================================================
 
-void TelepartySync::onEvent(const QString &type, const QVariantMap &data, const QString &) {
+void TelepartySync::onEvent(const QString &type, const QVariantMap &data, const QString &from) {
     if (type == QLatin1String("open")) {
-        handleOpen(data);
+        handleOpen(data, from);
     } else if (type == QLatin1String("state")) {
-        handleState(data);
+        handleState(data, from);
     } else if (type == QLatin1String("syncme")) {
         sendState();
+    } else if (type == QLatin1String("ts")) {
+        handleTimeSync(data, from);
+    } else if (type == QLatin1String("rd")) {
+        handleReadiness(data, from);
     } else if (type == QLatin1String("play") || type == QLatin1String("pause") || type == QLatin1String("seek")) {
-        const qint64 t = cleanTime(data.value(QStringLiteral("t")));
-        m_partyTimeMs = t;
-        if (type == QLatin1String("play")) m_partyPlaying = true;
-        else if (type == QLatin1String("pause")) m_partyPlaying = false;
-        m_partyClock.start();
-
-        if (!m_currentUrl.isEmpty()) {
-            emit partyMediaAvailable(m_currentUrl, m_currentTitle, t, m_partyDurationMs);
-        }
-
-        // Not on the player page (or not loaded on the party video yet): keep tracking the
-        // party's timestamp so clicking Continue Watching / Now Playing starts right there.
-        if (!m_watching || m_currentUrl.isEmpty() || !m_player || m_player->url() != m_currentUrl) return;
-
-        if (type == QLatin1String("play")) {
-            align(t, true, QStringLiteral("Resumed by a member"));
-        } else if (type == QLatin1String("pause")) {
-            align(t, false, QStringLiteral("Paused by a member"));
-        } else {
-            applySeek(t);
-        }
+        handlePlaybackTransition(type, data, from);
     }
 }
 
-void TelepartySync::handleOpen(const QVariantMap &data) {
+void TelepartySync::handleOpen(const QVariantMap &data, const QString &from) {
     QString url;
     QString title;
     if (!resolveCatalogMovie(data, url, title)) {
@@ -468,20 +738,33 @@ void TelepartySync::handleOpen(const QVariantMap &data) {
         return;
     }
 
+    const qint64 now = localNowMs();
     // Autoplay can make two members open the same next episode at the same moment
-    if (url == m_lastOpenUrl && nowMs() - m_lastOpenAt < kOpenDedupeMs) return;
+    if (url == m_lastOpenUrl && m_lastOpenAt > 0 && (now - m_lastOpenAt) < kOpenDedupeMs) return;
 
-    noteOpen(url, title);
+    const qint64 rev = data.contains(QStringLiteral("rev"))
+                           ? data.value(QStringLiteral("rev")).toLongLong()
+                           : m_timeline.nextRevision();
+    const qint64 ht = data.contains(QStringLiteral("ht"))
+                          ? data.value(QStringLiteral("ht")).toLongLong()
+                          : estimatedHostNowMs();
+
+    noteOpen(url, title, rev, ht, from);
     m_syncOnPlay = true;
     m_needState = false;
     m_stateTimer.stop();
 
-    FLUX_LOG_INFO("Teleparty", QString("A member opened: %1").arg(title.isEmpty() ? url : title));
+    FLUX_LOG_INFO("Teleparty", QString("A member opened: %1 (rev=%2)").arg(title.isEmpty() ? url : title).arg(rev));
     emit remoteOpenRequested(url, title, 0);
 }
 
-void TelepartySync::handleState(const QVariantMap &data) {
-    if (!m_needState && !m_currentUrl.isEmpty()) return; // we did not ask (or already have an answer)
+void TelepartySync::handleState(const QVariantMap &data, const QString &from) {
+    const qint64 incomingRev = data.value(QStringLiteral("rev"), 0).toLongLong();
+    const bool isHigherRevision = (incomingRev > 0 && incomingRev > m_timeline.revision());
+
+    if (!m_needState && !m_currentUrl.isEmpty() && !isHigherRevision) {
+        return; // we did not ask (or already have an up-to-date revision)
+    }
 
     QString url;
     QString title;
@@ -498,6 +781,9 @@ void TelepartySync::handleState(const QVariantMap &data) {
     const bool playing = data.contains(QStringLiteral("p"))
                              ? (data.value(QStringLiteral("p")).toInt() != 0)
                              : data.value(QStringLiteral("playing"), true).toBool();
+    const double rate = AuthoritativeTimeline::sanitizeRate(data.value(QStringLiteral("r"), 1.0).toDouble());
+    const qint64 rawHt = data.value(QStringLiteral("ht"), 0).toLongLong();
+    const qint64 rev = (incomingRev > 0) ? incomingRev : std::max<qint64>(1, m_timeline.nextRevision());
 
     const bool changed = (m_currentUrl != url || m_currentTitle != title);
     m_currentUrl = url;
@@ -505,55 +791,401 @@ void TelepartySync::handleState(const QVariantMap &data) {
     m_partyTimeMs = t;
     if (dur > 0) m_partyDurationMs = dur;
     m_partyPlaying = playing;
-    m_partyClock.start();
+    m_partyUpdatedLocalMs = localNowMs();
+
+    TimelineSnapshot snap;
+    snap.sessionId = m_session ? m_session->code() : QString();
+    snap.revision = rev;
+    snap.authorId = from;
+    snap.mediaId = encodeCatalogMovieId(url);
+    snap.mediaUrl = url;
+    snap.mediaTitle = title;
+    snap.durationMs = m_partyDurationMs;
+    snap.playing = playing;
+    snap.playbackRate = rate;
+    snap.valid = true;
+
+    if (rawHt > 0 && m_clockEstimator.hasEstimate()) {
+        snap.basePositionMs = t;
+        snap.hostTimestampMs = rawHt;
+        m_reanchorStateOnFirstClockLock = false;
+    } else {
+        // Clock estimator hasn't locked its first sample yet; compensate with estimated one-way delay
+        // and store rawHt so the timeline re-anchors as soon as the first "ts" pong arrives.
+        const qint64 oneWayCompMs = playing ? ClockEstimator::kDefaultOneWayMs : 0;
+        snap.basePositionMs = AuthoritativeTimeline::sanitizePositionMs(t + oneWayCompMs, m_partyDurationMs);
+        snap.hostTimestampMs = estimatedHostNowMs();
+        if (rawHt > 0) {
+            m_reanchorStateOnFirstClockLock = true;
+            m_rawStateHostTimestampMs = rawHt;
+            m_rawStateBasePositionMs = t;
+        }
+    }
+    m_timeline.forceUpdate(snap);
+
+    const qint64 liveExpectedPos = m_timeline.expectedPositionMs(estimatedHostNowMs());
 
     if (changed) emit currentMediaChanged();
-    emit partyMediaAvailable(url, title, t, m_partyDurationMs);
+    emit partyMediaAvailable(url, title, liveExpectedPos, m_partyDurationMs);
+    emit diagnosticsChanged();
 
     // Already on that video on the player page: line up with the others
     if (m_watching && m_player && url == m_player->url()) {
-        if (m_player->state() == QLatin1String("Opening") || m_pendingSync) {
+        if (m_player->state() == QLatin1String("Opening") || m_player->isBuffering() || m_pendingSync) {
             m_pendingSync = true;
-            m_pendingTimeMs = t;
+            m_pendingTimeMs = liveExpectedPos;
             m_pendingPlaying = playing;
-            m_pendingClock.start();
+            m_pendingStartedLocalMs = localNowMs();
         } else {
-            align(t, playing, QString());
+            align(liveExpectedPos, playing, QString(), ActionOrigin::JoinSync);
         }
         return;
     }
 
     // Late joiner on the Home / Search page: do NOT force-open or reset the party;
     // the video is now placed first in Continue Watching and the Now Playing pill is active.
-    FLUX_LOG_INFO("Teleparty", QString("Party is watching: %1 at %2")
-                                   .arg(title.isEmpty() ? url : title, formatTime(t)));
+    FLUX_LOG_INFO("Teleparty", QString("Party is watching: %1 at %2 (rev=%3)")
+                                   .arg(title.isEmpty() ? url : title, formatTime(liveExpectedPos))
+                                   .arg(rev));
 }
 
-void TelepartySync::align(qint64 timeMs, bool playing, const QString &note) {
+void TelepartySync::handlePlaybackTransition(const QString &type, const QVariantMap &data, const QString &from) {
+    const qint64 t = cleanTime(data.value(QStringLiteral("t")));
+    const qint64 rev = data.contains(QStringLiteral("rev"))
+                           ? data.value(QStringLiteral("rev")).toLongLong()
+                           : m_timeline.nextRevision();
+    const qint64 rawHt = data.value(QStringLiteral("ht"), 0).toLongLong();
+    const double rate = AuthoritativeTimeline::sanitizeRate(data.value(QStringLiteral("r"), 1.0).toDouble());
+    const qint64 seq = data.value(QStringLiteral("_seq"), 0).toLongLong();
+
+    const QString eventId = (seq > 0)
+                                ? QStringLiteral("%1:%2").arg(from).arg(seq)
+                                : data.value(QStringLiteral("eid")).toString();
+
+    const qint64 estHostNow = estimatedHostNowMs();
+    const qint64 targetHostMs = (rawHt > 0 && m_clockEstimator.hasEstimate()) ? rawHt : estHostNow;
+
+    ScheduledAction action;
+    action.revision = rev;
+    action.eventId = eventId;
+    action.authorId = from;
+    action.targetPositionMs = t;
+    action.targetHostTimestampMs = targetHostMs;
+    action.playbackRate = rate;
+    action.origin = ActionOrigin::ScheduledRemote;
+
+    if (type == QLatin1String("play")) {
+        action.type = ScheduledActionType::Play;
+        action.playing = true;
+        action.activityNote = QStringLiteral("Resumed by a member");
+    } else if (type == QLatin1String("pause")) {
+        action.type = ScheduledActionType::Pause;
+        action.playing = false;
+        action.activityNote = QStringLiteral("Paused by a member");
+    } else {
+        action.type = ScheduledActionType::Seek;
+        action.playing = m_timeline.isValid() ? m_timeline.snapshot().playing : m_partyPlaying;
+        action.activityNote = QStringLiteral("Skipped to ") + formatTime(t);
+    }
+
+    const QString hostPeerId = m_session ? m_session->hostMemberId() : QString();
+    ScheduledAction readyAction;
+    const ScheduleStatus status = m_scheduler.schedule(action, estHostNow, localNowMs(), readyAction, hostPeerId);
+
+    if (status == ScheduleStatus::DuplicateIgnored || status == ScheduleStatus::StaleDropped) {
+        FLUX_LOG_DEBUG("Teleparty",
+                       QString("Ignored %1 '%2' event from '%3' (rev=%4, currentRev=%5)")
+                           .arg(status == ScheduleStatus::DuplicateIgnored ? "duplicate" : "stale/out-of-order",
+                                type, from)
+                           .arg(rev)
+                           .arg(m_timeline.revision()));
+        emit diagnosticsChanged();
+        return;
+    }
+
+    // Update authoritative timeline
+    TimelineSnapshot snap = m_timeline.snapshot();
+    snap.sessionId = m_session ? m_session->code() : QString();
+    snap.revision = rev;
+    snap.eventId = eventId;
+    snap.authorId = from;
+    if (!m_currentUrl.isEmpty()) {
+        if (snap.mediaId.isEmpty()) snap.mediaId = encodeCatalogMovieId(m_currentUrl);
+        snap.mediaUrl = m_currentUrl;
+        snap.mediaTitle = m_currentTitle;
+    }
+    snap.durationMs = m_partyDurationMs;
+    snap.basePositionMs = t;
+    snap.hostTimestampMs = targetHostMs;
+    snap.playing = action.playing;
+    snap.playbackRate = rate;
+    snap.valid = !m_currentUrl.isEmpty() || snap.valid;
+    m_timeline.forceUpdate(snap);
+
+    const qint64 expectedNowPos = m_timeline.isValid() ? m_timeline.expectedPositionMs(estHostNow) : t;
+    m_partyTimeMs = expectedNowPos;
+    m_partyPlaying = action.playing;
+    m_partyUpdatedLocalMs = localNowMs();
+
+    if (!m_currentUrl.isEmpty()) {
+        emit partyMediaAvailable(m_currentUrl, m_currentTitle, expectedNowPos, m_partyDurationMs);
+    }
+
+    if (status == ScheduleStatus::Queued) {
+        updateScheduleTimer();
+        emit diagnosticsChanged();
+        return;
+    }
+
+    executeScheduledAction(readyAction);
+    emit diagnosticsChanged();
+}
+
+void TelepartySync::processScheduledActions() {
+    if (m_scheduler.pendingCount() == 0) {
+        return;
+    }
+
+    const qint64 estHostNow = estimatedHostNowMs();
+    const QList<ScheduledAction> due = m_scheduler.popDueActions(estHostNow);
+    for (const ScheduledAction &action : due) {
+        executeScheduledAction(action);
+    }
+    updateScheduleTimer();
+    if (!due.isEmpty()) {
+        emit diagnosticsChanged();
+    }
+}
+
+void TelepartySync::updateScheduleTimer() {
+    const qint64 delayMs = m_scheduler.nextWakeupDelayMs(estimatedHostNowMs());
+    if (delayMs < 0) {
+        m_scheduleTimer.stop();
+    } else {
+        m_scheduleTimer.start(static_cast<int>(delayMs));
+    }
+}
+
+void TelepartySync::executeScheduledAction(const ScheduledAction &action) {
+    // Not on the player page (or not loaded on the party video yet): keep tracking the
+    // party's timestamp so clicking Continue Watching / Now Playing starts right there.
+    if (!m_watching || m_currentUrl.isEmpty() || !m_player || m_player->url() != m_currentUrl) {
+        return;
+    }
+
+    if (action.type == ScheduledActionType::Play) {
+        align(action.targetPositionMs, true, action.activityNote, action.origin);
+    } else if (action.type == ScheduledActionType::Pause) {
+        align(action.targetPositionMs, false, action.activityNote, action.origin);
+    } else if (action.type == ScheduledActionType::Seek) {
+        applySeek(action.targetPositionMs, action.activityNote, action.origin);
+        ScopedInternalAction guard(m_internalActionDepth);
+        if (action.playing && m_player->isPaused()) {
+            m_player->remoteResume();
+        } else if (!action.playing && !m_player->isPaused()) {
+            m_player->remotePause();
+        }
+    }
+}
+
+void TelepartySync::align(qint64 timeMs, bool playing, const QString &note, ActionOrigin origin) {
     if (!m_player) return;
+    ScopedInternalAction guard(m_internalActionDepth);
+
     const QString st = m_player->state();
+    const qint64 localNow = localNowMs();
+    const bool isOpeningOrBuffering = (st == QLatin1String("Opening") ||
+                                       m_player->isBuffering() ||
+                                       st.startsWith(QLatin1String("Buffering")));
 
     if (st == QLatin1String("Ended") || st == QLatin1String("Stopped")) {
-        if (playing) m_player->remoteRestart(timeMs);
+        if (playing) {
+            m_player->remoteRestart(timeMs);
+            m_driftController.notifyExternalSeek(localNow, timeMs);
+        }
     } else if (playing) {
-        if (qAbs(m_player->timeMs() - timeMs) > kPlayDriftMs) m_player->remoteSeekTo(timeMs);
-        if (m_player->isPaused()) m_player->remoteResume();
+        const qint64 drift = std::llabs(m_player->timeMs() - timeMs);
+        const qint64 threshold = (origin == ActionOrigin::JoinSync)
+                                     ? kCatchUpDriftMs
+                                     : m_driftController.config().hardSeekThresholdMs;
+        const bool canSeekNow = !isOpeningOrBuffering &&
+                                (origin == ActionOrigin::JoinSync || !m_player->isSeekSettling());
+        if (canSeekNow && drift > threshold) {
+            m_player->remoteSetRate(1.0);
+            m_player->remoteSeekTo(timeMs);
+            m_driftController.notifyExternalSeek(localNow, timeMs);
+        }
+        if (m_player->isPaused()) {
+            m_player->remoteResume();
+        }
     } else {
+        m_player->remoteSetRate(1.0);
         m_player->remotePause();
-        if (qAbs(m_player->timeMs() - timeMs) > kPauseDriftMs) m_player->remoteSeekTo(timeMs);
+        const qint64 drift = std::llabs(m_player->timeMs() - timeMs);
+        if (!isOpeningOrBuffering && drift > m_driftController.config().pausedSeekThresholdMs) {
+            m_player->remoteSeekTo(timeMs);
+            m_driftController.notifyExternalSeek(localNow, timeMs);
+        }
     }
 
     if (!note.isEmpty()) emit activity(note);
 }
 
-void TelepartySync::applySeek(qint64 timeMs) {
+void TelepartySync::applySeek(qint64 timeMs, const QString &note, ActionOrigin) {
     if (!m_player) return;
+    ScopedInternalAction guard(m_internalActionDepth);
+
+    m_player->remoteSetRate(1.0);
     m_player->remoteSeekTo(timeMs);
-    emit activity(QStringLiteral("Skipped to ") + formatTime(timeMs));
+    m_driftController.notifyExternalSeek(localNowMs(), timeMs);
+    const QString msg = note.isEmpty() ? (QStringLiteral("Skipped to ") + formatTime(timeMs)) : note;
+    emit activity(msg);
+}
+
+// ============================================================================
+// Periodic Three-Tier Adaptive Drift Controller Loop
+// ============================================================================
+
+void TelepartySync::evaluateDriftTick() {
+    processScheduledActions();
+    updateLocalReadiness(true);
+
+    if (!m_session || !m_session->active() || !m_watching || !m_player) {
+        return;
+    }
+    if (m_currentUrl.isEmpty() || m_player->url() != m_currentUrl || !m_timeline.isValid()) {
+        return;
+    }
+    if (m_pendingSync || m_needState || m_scheduler.pendingCount() > 0) {
+        return;
+    }
+
+    const qint64 localNow = localNowMs();
+    m_lastDriftTickLocalMs = localNow;
+
+    const QString st = m_player->state();
+    if (st == QLatin1String("Idle") || st == QLatin1String("Error")) {
+        return;
+    }
+
+    PlayerObservation obs;
+    obs.actualPositionMs = m_player->timeMs();
+    obs.durationMs = m_player->durationMs();
+    obs.isPlaying = m_player->isPlaying();
+    obs.isPaused = m_player->isPaused();
+    obs.isBuffering = m_player->isBuffering() || st.startsWith(QLatin1String("Buffering"));
+    obs.isOpening = (st == QLatin1String("Opening"));
+    obs.isSeekSettling = m_player->isSeekSettling();
+    obs.isSeekable = m_player->isSeekable();
+    obs.isEndedOrStopped = (st == QLatin1String("Ended") || st == QLatin1String("Stopped"));
+    obs.currentRate = m_player->playbackRate();
+    obs.rateControlSupported = m_rateControlSupported;
+
+    const qint64 estHostNow = estimatedHostNowMs();
+    const TimelineSnapshot &snap = m_timeline.snapshot();
+    const qint64 expectedPos = m_timeline.expectedPositionMs(estHostNow);
+
+    const DriftCorrectionDecision dec = m_driftController.evaluate(
+        obs, expectedPos, snap.playing, snap.playbackRate, m_clockEstimator.uncertaintyMs(), localNow);
+
+    {
+        ScopedInternalAction guard(m_internalActionDepth);
+
+        if (dec.shouldRestart) {
+            m_player->remoteRestart(dec.targetSeekMs >= 0 ? dec.targetSeekMs : expectedPos);
+            emit diagnosticsChanged();
+            return;
+        }
+        if (dec.shouldPause) {
+            m_player->remotePause();
+        }
+        if (dec.shouldResume) {
+            m_player->remoteResume();
+        }
+
+        switch (dec.mode) {
+        case DriftCorrectionMode::RateAdjust: {
+            const bool accepted = m_player->remoteSetRate(dec.targetRate);
+            if (!accepted) {
+                m_rateControlSupported = false;
+                m_driftController.notifyRateControlFailed();
+                FLUX_LOG_WARN("Teleparty", "Playback rate adjustment unsupported by stream; falling back to seek control");
+            } else if (m_lastSoftLogLocalMs == 0 || (localNow - m_lastSoftLogLocalMs) >= kSoftLogCooldownMs) {
+                m_lastSoftLogLocalMs = localNow;
+                FLUX_LOG_DEBUG("Teleparty",
+                               QString("Soft drift rate adjust: drift=%1ms, rate=%2x, rev=%3")
+                                   .arg(dec.signedDriftMs)
+                                   .arg(dec.targetRate, 0, 'f', 3)
+                                   .arg(snap.revision));
+            }
+            break;
+        }
+        case DriftCorrectionMode::RestoreRate: {
+            m_player->remoteSetRate(dec.targetRate);
+            FLUX_LOG_DEBUG("Teleparty",
+                           QString("Restored playback rate to %1x (drift=%2ms)")
+                               .arg(dec.targetRate, 0, 'f', 2)
+                               .arg(dec.signedDriftMs));
+            break;
+        }
+        case DriftCorrectionMode::HardSeek:
+        case DriftCorrectionMode::BufferRecoverySeek: {
+            m_player->remoteSetRate(snap.playbackRate);
+            if (dec.targetSeekMs >= 0) {
+                m_player->remoteSeekTo(dec.targetSeekMs);
+                FLUX_LOG_INFO("Teleparty",
+                              QString("%1 seek to %2ms (drift=%3ms, rev=%4)")
+                                  .arg(dec.mode == DriftCorrectionMode::BufferRecoverySeek ? "Buffer-recovery" : "Hard",
+                                       QString::number(dec.targetSeekMs),
+                                       QString::number(dec.signedDriftMs),
+                                       QString::number(snap.revision)));
+            }
+            break;
+        }
+        case DriftCorrectionMode::None:
+        case DriftCorrectionMode::SuppressedBuffering:
+        case DriftCorrectionMode::SuppressedSeeking:
+            break;
+        }
+    }
+
+    emit diagnosticsChanged();
+}
+
+void TelepartySync::stepSimulation() {
+    const qint64 now = localNowMs();
+    if (m_hasPendingSeek && (now - m_partyUpdatedLocalMs) >= kSeekMergeMs) {
+        flushSeek();
+    }
+    processScheduledActions();
+
+    if (m_session && m_session->active()) {
+        if (!m_session->isHost() && m_session->memberCount() > 1) {
+            const int pingInterval = m_clockEstimator.recommendedPingIntervalMs();
+            if (m_lastClockPingLocalMs == 0 || (now - m_lastClockPingLocalMs) >= pingInterval) {
+                sendClockPing();
+            }
+        }
+        if (m_lastDriftTickLocalMs == 0 || (now - m_lastDriftTickLocalMs) >= kDriftTickIntervalMs) {
+            evaluateDriftTick();
+        }
+    }
+}
+
+void TelepartySync::onPlayerBufferingChanged() {
+    if (!m_player) return;
+    updateLocalReadiness(true);
+    // If buffering just started while playback rate was nudged, immediately restore 1.0x
+    if (m_player->isBuffering() && std::abs(m_player->playbackRate() - 1.0) > 0.001) {
+        ScopedInternalAction guard(m_internalActionDepth);
+        m_player->remoteSetRate(1.0);
+    }
 }
 
 void TelepartySync::onPlayerStateChanged() {
     if (!m_player) return;
+    updateLocalReadiness(true);
+
     const QString st = m_player->state();
     if (st == QLatin1String("Error")) {
         m_pendingSync = false;
@@ -576,15 +1208,51 @@ void TelepartySync::onPlayerStateChanged() {
     if (!m_pendingSync) return;
 
     m_pendingSync = false;
-    // The party kept playing while we were loading
-    const qint64 target = m_pendingTimeMs + (m_pendingPlaying ? m_pendingClock.elapsed() : 0);
-    if (qAbs(m_player->timeMs() - target) > kCatchUpDriftMs) m_player->remoteSeekTo(target);
-    if (!m_pendingPlaying) m_player->remotePause();
+    // Calculate exact expected position on the authoritative timeline (or fallback elapsed clock)
+    const qint64 target = m_timeline.isValid()
+                              ? m_timeline.expectedPositionMs(estimatedHostNowMs())
+                              : (m_pendingTimeMs + (m_pendingPlaying ? std::max<qint64>(0, localNowMs() - m_pendingStartedLocalMs) : 0));
+    const bool shouldPlay = m_timeline.isValid() ? m_timeline.snapshot().playing : m_pendingPlaying;
+
+    ScopedInternalAction guard(m_internalActionDepth);
+    if (std::llabs(m_player->timeMs() - target) > kCatchUpDriftMs) {
+        m_player->remoteSeekTo(target);
+        m_driftController.notifyExternalSeek(localNowMs(), target);
+    }
+    if (!shouldPlay) {
+        m_player->remotePause();
+    }
 }
 
 // ============================================================================
-// Session bookkeeping
+// Session & Authority Bookkeeping
 // ============================================================================
+
+void TelepartySync::onAuthorityChanged(const QString &authorityMemberId, bool localIsAuthority) {
+    if (localIsAuthority) {
+        const bool wasGuest = !m_clockEstimator.isSelfAuthority();
+        const qint64 oldEstHostNow = estimatedHostNowMs();
+        const qint64 newLocalNow = localNowMs();
+
+        m_clockEstimator.setSelfAuthority(true);
+        m_clockEstimator.setAuthorityPeerId(authorityMemberId);
+        m_clockSyncTimer.stop();
+
+        if (wasGuest && m_timeline.isValid()) {
+            m_timeline.migrateHostClock(authorityMemberId, oldEstHostNow, newLocalNow);
+            sendState();
+        }
+    } else {
+        if (m_clockEstimator.authorityPeerId() != authorityMemberId || m_clockEstimator.isSelfAuthority()) {
+            m_clockEstimator.reset(false, authorityMemberId);
+            if (m_player && m_session && m_session->active()) {
+                m_clockSyncTimer.start(m_clockEstimator.recommendedPingIntervalMs());
+                sendClockPing();
+            }
+        }
+    }
+    emit diagnosticsChanged();
+}
 
 void TelepartySync::onSessionStateChanged() {
     if (!m_session) return;
@@ -593,8 +1261,13 @@ void TelepartySync::onSessionStateChanged() {
     if (s == QLatin1String("idle")) {
         resetParty();
     } else if (s == QLatin1String("joined") && m_prevSessionState == QLatin1String("reconnecting")) {
-        // We may have missed things while offline; our re-announcement makes the other
-        // members send their state, which we are now ready to accept
+        // Reconnected after a drop: preserve known monotonic clock offset while restarting
+        // fast ping bursts, and request current room state
+        m_clockEstimator.softResetForReconnect();
+        if (m_player && !m_session->isHost()) {
+            m_clockSyncTimer.start(m_clockEstimator.recommendedPingIntervalMs());
+            sendClockPing();
+        }
         armNeedState();
         m_session->sendEvent(QStringLiteral("syncme"));
     }
@@ -606,20 +1279,49 @@ void TelepartySync::armNeedState() {
     m_stateTimer.start(kStateWaitMs);
 }
 
-void TelepartySync::noteOpen(const QString &url, const QString &title) {
+void TelepartySync::noteOpen(const QString &url, const QString &title, qint64 rev,
+                             qint64 hostTimestampMs, const QString &authorId) {
     const bool changed = (m_currentUrl != url || m_currentTitle != title);
     m_currentUrl = url;
     m_currentTitle = title;
     m_partyTimeMs = 0;
     m_partyDurationMs = 0;
     m_partyPlaying = true;
-    m_partyClock.start();
+    m_partyUpdatedLocalMs = localNowMs();
     m_lastOpenUrl = url;
-    m_lastOpenAt = nowMs();
+    m_lastOpenAt = m_partyUpdatedLocalMs;
     m_pendingSync = false;
     m_syncOnPlay = false;
     m_announceOnPlay = false;
+    m_reanchorStateOnFirstClockLock = false;
+    m_rateControlSupported = true;
+
+    m_scheduler.reset();
+    m_driftController.reset();
+    m_scheduleTimer.stop();
+
+    if (m_player && std::abs(m_player->playbackRate() - 1.0) > 0.001) {
+        ScopedInternalAction guard(m_internalActionDepth);
+        m_player->remoteSetRate(1.0);
+    }
+
+    TimelineSnapshot snap;
+    snap.sessionId = m_session ? m_session->code() : QString();
+    snap.revision = std::max<qint64>(1, rev);
+    snap.authorId = authorId;
+    snap.mediaId = encodeCatalogMovieId(url);
+    snap.mediaUrl = url;
+    snap.mediaTitle = title;
+    snap.durationMs = 0;
+    snap.basePositionMs = 0;
+    snap.hostTimestampMs = hostTimestampMs;
+    snap.playing = true;
+    snap.playbackRate = 1.0;
+    snap.valid = true;
+    m_timeline.forceUpdate(snap);
+
     if (changed) emit currentMediaChanged();
+    emit diagnosticsChanged();
 }
 
 void TelepartySync::resetParty() {
@@ -629,7 +1331,7 @@ void TelepartySync::resetParty() {
     m_partyTimeMs = 0;
     m_partyDurationMs = 0;
     m_partyPlaying = true;
-    m_partyClock.invalidate();
+    m_partyUpdatedLocalMs = 0;
     m_lastOpenUrl.clear();
     m_lastOpenAt = 0;
     m_needState = false;
@@ -637,9 +1339,33 @@ void TelepartySync::resetParty() {
     m_syncOnPlay = false;
     m_announceOnPlay = false;
     m_hasPendingSeek = false;
+    m_reanchorStateOnFirstClockLock = false;
+    m_rateControlSupported = true;
+    m_lastDriftTickLocalMs = 0;
+    m_lastClockPingLocalMs = 0;
+    m_lastSoftLogLocalMs = 0;
+    m_lastReadinessSentLocalMs = 0;
+    m_localReadiness = ParticipantReadiness::Idle;
+    m_peerReadiness.clear();
+
     m_stateTimer.stop();
     m_seekTimer.stop();
+    m_driftTimer.stop();
+    m_clockSyncTimer.stop();
+    m_scheduleTimer.stop();
+
+    m_timeline.reset();
+    m_clockEstimator.reset();
+    m_scheduler.reset();
+    m_driftController.reset();
+
+    if (m_player && std::abs(m_player->playbackRate() - 1.0) > 0.001) {
+        ScopedInternalAction guard(m_internalActionDepth);
+        m_player->remoteSetRate(1.0);
+    }
+
     if (hadMedia) emit currentMediaChanged();
+    emit diagnosticsChanged();
 }
 
 bool TelepartySync::playerRunning() const {
@@ -649,10 +1375,70 @@ bool TelepartySync::playerRunning() const {
 }
 
 qint64 TelepartySync::partyTimeMs() const {
-    if (m_partyPlaying && m_partyClock.isValid()) {
-        return m_partyTimeMs + m_partyClock.elapsed();
+    if (m_timeline.isValid()) {
+        return m_timeline.expectedPositionMs(estimatedHostNowMs());
+    }
+    if (m_partyPlaying && m_partyUpdatedLocalMs > 0) {
+        return m_partyTimeMs + std::max<qint64>(0, localNowMs() - m_partyUpdatedLocalMs);
     }
     return m_partyTimeMs;
+}
+
+// ============================================================================
+// Observability & Diagnostics
+// ============================================================================
+
+qint64 TelepartySync::scheduledLeadTimeMs() const {
+    const int members = m_session ? m_session->memberCount() : 1;
+    return m_clockEstimator.recommendedLeadTimeMs(members);
+}
+
+qint64 TelepartySync::authoritativePositionMs() const {
+    return m_timeline.isValid() ? m_timeline.expectedPositionMs(estimatedHostNowMs()) : m_partyTimeMs;
+}
+
+qint64 TelepartySync::actualPositionMs() const {
+    return m_player ? m_player->timeMs() : 0;
+}
+
+double TelepartySync::currentPlaybackRate() const {
+    return m_player ? m_player->playbackRate() : 1.0;
+}
+
+SyncDiagnostics TelepartySync::diagnostics() const {
+    SyncDiagnostics diag;
+    diag.smoothedRttMs = m_clockEstimator.medianRttMs();
+    diag.minRttMs = m_clockEstimator.minRttMs();
+    diag.worstRttMs = m_clockEstimator.worstRttMs();
+    diag.jitterMs = m_clockEstimator.jitterMs();
+    diag.clockOffsetMs = m_clockEstimator.clockOffsetMs();
+    diag.clockUncertaintyMs = m_clockEstimator.uncertaintyMs();
+    diag.clockConfidence = m_clockEstimator.confidence();
+    diag.clockLocked = m_clockEstimator.isLocked();
+    diag.clockSampleCount = m_clockEstimator.sampleCount();
+    diag.rejectedSampleCount = m_clockEstimator.rejectedCount();
+
+    diag.scheduledLeadTimeMs = scheduledLeadTimeMs();
+    diag.pendingScheduledCount = m_scheduler.pendingCount();
+
+    diag.currentRevision = m_timeline.revision();
+    diag.authorityPeerId = m_session ? m_session->hostMemberId() : m_clockEstimator.authorityPeerId();
+    diag.localReadiness = readinessToString(m_localReadiness);
+    diag.authoritativePositionMs = authoritativePositionMs();
+    diag.actualPositionMs = actualPositionMs();
+    diag.signedDriftMs = m_driftController.lastSignedDriftMs();
+    diag.smoothedDriftMs = m_driftController.smoothedDriftMs();
+    diag.currentPlaybackRate = currentPlaybackRate();
+    diag.activeCorrectionMode = activeCorrectionMode();
+
+    diag.softCorrectionCount = m_driftController.softCorrectionCount();
+    diag.hardSeekCorrectionCount = m_driftController.hardSeekCount();
+    diag.bufferRecoveryCount = m_driftController.bufferRecoveryCount();
+    diag.lateEventCount = m_scheduler.lateEventCount();
+    diag.supersededActionCount = m_scheduler.supersededCount();
+    diag.duplicateEventCount = m_scheduler.duplicateCount() + (m_session ? m_session->duplicateEventCount() : 0);
+    diag.staleRevisionDropCount = m_scheduler.staleDroppedCount();
+    return diag;
 }
 
 QString TelepartySync::formatTime(qint64 ms) {

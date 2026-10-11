@@ -39,6 +39,7 @@ class VLCPlayer : public QObject {
     Q_PROPERTY(int selectedSubtitleTrack READ selectedSubtitleTrack WRITE selectSubtitleTrack NOTIFY selectedSubtitleTrackChanged)
 
     Q_PROPERTY(QString errorMessage READ errorMessage NOTIFY errorOccurred)
+    Q_PROPERTY(double playbackRate READ playbackRate NOTIFY playbackRateChanged)
 
     // Learned / configured language preferences (used to auto-pick tracks)
     Q_PROPERTY(QStringList preferredAudio READ preferredAudio NOTIFY languagePreferencesChanged)
@@ -84,6 +85,24 @@ public:
     int selectedSubtitleTrack() const;
 
     QString errorMessage() const { return m_errorMessage; }
+    double playbackRate() const { return m_playbackRate; }
+
+    // True when the active media supports random-access seeking
+    Q_INVOKABLE bool isSeekable() const;
+    // True while a local or remote seek is coalescing or within the post-seek settling guard
+    Q_INVOKABLE bool isSeekSettling() const;
+
+    // Deterministic simulation hooks for automated testing (disabled in normal production runs)
+    void setSimulatedMode(bool enabled);
+    bool isSimulatedMode() const { return m_simulatedMode; }
+    void setSimulatedState(const QString &state, qint64 timeMs, qint64 durationMs = 7200000,
+                           bool buffering = false, float bufferPct = 100.0f);
+    void setSimulatedSeekable(bool seekable) { m_simulatedSeekable = seekable; }
+    void setSimulatedRateSupported(bool supported) { m_simulatedRateSupported = supported; }
+    void setSimulatedKeyframeStepMs(qint64 stepMs) { m_simulatedKeyframeStepMs = stepMs; }
+    void advanceSimulatedTime(qint64 elapsedRealMs);
+    void simulateUserTogglePlay(bool playing);
+    void simulateUserSeek(qint64 targetMs);
 
 public slots:
     Q_INVOKABLE void play(const QString &mediaUrl = QString());
@@ -105,6 +124,7 @@ public slots:
     Q_INVOKABLE void remoteResume();
     Q_INVOKABLE void remoteSeekTo(qint64 timeMs);
     Q_INVOKABLE void remoteRestart(qint64 startMs);
+    Q_INVOKABLE bool remoteSetRate(double rate);
 
     QStringList preferredAudio() const { return m_preferredAudio; }
     QString preferredSubtitle() const { return m_preferredSubtitle; }
@@ -126,6 +146,7 @@ signals:
     void errorOccurred(const QString &message);
     void mediaPlayerRecreated();
     void languagePreferencesChanged();
+    void playbackRateChanged();
 
     // Fired only for actions the local user performed (not for remote / Teleparty ones)
     void userToggledPlay(bool playing, qint64 timeMs);
@@ -201,6 +222,18 @@ private:
     bool m_audioPrefApplied = false;
     bool m_subPrefApplied = false;
     int m_autoTrackAttempts = 0;
+
+    // Playback rate (1.0 = normal speed; adaptive Teleparty drift control uses 0.96..1.04)
+    double m_playbackRate = 1.0;
+
+    // Deterministic simulation state for headless unit tests
+    bool m_simulatedMode = false;
+    bool m_simulatedSeekable = true;
+    bool m_simulatedRateSupported = true;
+    qint64 m_simulatedKeyframeStepMs = 0;
+    qint64 m_simulatedClockMs = 0;
+    qint64 m_simulatedSeekGuardUntilMs = 0;
+    double m_simulatedSubMsRemainder = 0.0;
 };
 
 } // namespace Flux

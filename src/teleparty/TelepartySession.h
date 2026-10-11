@@ -2,10 +2,14 @@
 
 #include <QHash>
 #include <QJsonObject>
+#include <QList>
 #include <QObject>
+#include <QSet>
 #include <QString>
+#include <QStringList>
 #include <QTimer>
 #include <QVariantMap>
+#include <functional>
 
 #include "SyncplayClient.h"
 
@@ -15,12 +19,12 @@ namespace Flux {
 // (syncplay.pl:8995) over StartTLS + TLS using FLUX|-prefixed chat relay messages.
 //
 // Wire format (compact JSON after "FLUX|" prefix, automatically chunked if > MaxChat 150 chars):
-//   {"v":1, "t":"hello|presence|bye|event", "f":"<memberId>", "i":<seq>, "e":"<eventType>", "d":{...}}
+//   {"v":1, "t":"hello|presence|bye|event", "f":"<memberId>", "h"?:1, "i"?:<seq>, "e"?:<eventType>, "d"?:{...}}
 //
 //   hello     a new (or reconnected) member announces itself; everyone answers with "presence"
-//   presence  "I'm here"; also sent every few seconds as a heartbeat
+//   presence  "I'm here"; also sent every few seconds as a heartbeat ("h":1 indicates room host)
 //   bye       a member left cleanly (abrupt disconnects are also signaled by Syncplay's Set.user.left)
-//   event     application data (open video, play, pause, seek, state, syncme) - used by the sync layer
+//   event     application data (open, play, pause, seek, state, syncme, ts, rd) - used by the sync layer
 //
 // State is exposed to QML as fluxTeleparty.
 class TelepartySession : public QObject {
@@ -39,6 +43,8 @@ class TelepartySession : public QObject {
     Q_PROPERTY(QString errorText READ errorText NOTIFY errorChanged)
 
 public:
+    using TransportHook = std::function<bool(const QString &senderUsername, const QJsonObject &message)>;
+
     explicit TelepartySession(QObject *parent = nullptr);
     ~TelepartySession() override;
 
@@ -49,6 +55,11 @@ public:
     bool isHost() const { return m_isHost; }
     int memberCount() const;
     QString errorText() const { return m_errorText; }
+
+    QString memberId() const { return m_memberId; }
+    QString hostMemberId() const { return m_hostMemberId; }
+    QStringList memberIds() const;
+    int duplicateEventCount() const { return m_duplicateEventCount; }
 
     // Start a new session: generates a free 5-digit code
     Q_INVOKABLE void host();
@@ -65,6 +76,14 @@ public:
     // Deterministic mapping from 5-digit room code to Syncplay room name
     static QString roomNameForCode(const QString &code);
 
+    // Deterministic simulation hooks for automated multi-client network testing
+    void setSimulatedTransport(TransportHook hook);
+    void simulateJoinRoom(const QString &code, bool asHost, const QString &fixedMemberId = QString());
+    void simulateReceiveMessage(const QString &senderUsername, const QJsonObject &payload);
+    void simulatePeerLeft(const QString &username);
+    void simulateDisconnect();
+    void simulateReconnect();
+
 signals:
     void stateChanged();
     void codeChanged();
@@ -77,6 +96,10 @@ signals:
 
     // A member joined or rejoined: share your current state with them
     void memberJoined(const QString &memberId);
+    // A member left or disconnected
+    void memberLeft(const QString &memberId);
+    // Emitted when the authoritative host identity is established or migrates
+    void authorityChanged(const QString &authorityMemberId, bool localIsAuthority);
     // An event sent by another member
     void eventReceived(const QString &type, const QVariantMap &data, const QString &from);
 
@@ -101,7 +124,7 @@ private:
 
     QJsonObject makeMessage(const QString &type, const QString &eventType = QString(),
                             const QVariantMap &data = QVariantMap());
-    void publishMessage(const QJsonObject &message);
+    bool publishMessage(const QJsonObject &message);
 
     static bool isRecognizedEventType(const QString &eventType);
 
@@ -109,10 +132,14 @@ private:
     bool touchMember(const QString &id);
     void removeMember(const QString &id);
     void pruneMembers();
+    void updateHostAuthority(const QString &candidateHostId);
+    void electNewHostIfNeeded();
+    bool recordAndCheckDuplicateSeq(const QString &from, qint64 seq);
 
     static QString generateCode();
 
     SyncplayClient *m_client = nullptr;
+    TransportHook m_simulatedTransport;
     QTimer m_discoverTimer;    // waits for someone to answer our hello
     QTimer m_heartbeatTimer;
 
@@ -120,12 +147,15 @@ private:
     QString m_code;
     QString m_room;
     QString m_memberId;
+    QString m_hostMemberId;
     bool m_isHost = false;
     bool m_helloSent = false;
     int m_attemptsLeft = 0;                 // free-code retries when hosting
     qint64 m_nextEventId = 0;
     QHash<QString, qint64> m_members;       // other members -> last time we heard from them (ms)
-    QHash<QString, qint64> m_lastEventId;   // other members -> last processed event sequence number
+    QHash<QString, QList<qint64>> m_seenSeqOrder;
+    QHash<QString, QSet<qint64>> m_seenSeqSet;
+    int m_duplicateEventCount = 0;
     QString m_errorText;
 };
 

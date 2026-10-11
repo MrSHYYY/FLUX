@@ -11,6 +11,7 @@
 #include <QRegularExpression>
 #include <QSet>
 #include <QUuid>
+#include <algorithm>
 
 namespace Flux {
 
@@ -22,6 +23,7 @@ constexpr qint64 kMemberTimeoutMs = 32000;   // a member silent this long is dro
 constexpr int kHostDiscoverMs = 1200;        // hosting: wait this long for a clash with an existing room
 constexpr int kJoinDiscoverMs = 3500;        // joining: wait this long for someone to answer
 constexpr int kMaxHostAttempts = 5;
+constexpr int kMaxSeenSeqPerPeer = 32;
 
 QString configuredHost() {
     const QString env = qEnvironmentVariable("FLUX_SYNCPLAY_HOST").trimmed();
@@ -105,6 +107,15 @@ int TelepartySession::memberCount() const {
     return active() ? static_cast<int>(m_members.size()) + 1 : 0;
 }
 
+QStringList TelepartySession::memberIds() const {
+    QStringList ids = m_members.keys();
+    if (!m_memberId.isEmpty() && active()) {
+        ids.append(m_memberId);
+    }
+    std::sort(ids.begin(), ids.end());
+    return ids;
+}
+
 void TelepartySession::setState(State s) {
     if (m_state == s) return;
     m_state = s;
@@ -166,6 +177,7 @@ void TelepartySession::leave() {
     resetConnection();
     m_code.clear();
     m_isHost = false;
+    m_hostMemberId.clear();
     setState(State::Idle);
     emit codeChanged();
     emit membersChanged();
@@ -180,9 +192,12 @@ void TelepartySession::startSession() {
     // 11-char username ("FX_" + 8 hex chars) fits comfortably within Syncplay's 16-char limit
     m_memberId = QStringLiteral("FX_") +
                  QUuid::createUuid().toString(QUuid::WithoutBraces).remove('-').left(8);
+    m_hostMemberId = m_isHost ? m_memberId : QString();
     m_room = roomNameForCode(m_code);
     m_members.clear();
-    m_lastEventId.clear();
+    m_seenSeqOrder.clear();
+    m_seenSeqSet.clear();
+    m_duplicateEventCount = 0;
     m_helloSent = false;
     m_discoverTimer.stop();
     m_heartbeatTimer.stop();
@@ -196,15 +211,23 @@ void TelepartySession::startSession() {
                       .arg(m_isHost ? "Hosting" : "Joining", m_code, m_room, host)
                       .arg(port));
 
-    m_client->disconnectFromServer();
-    m_client->connectToServer(host, port, m_memberId, m_room);
+    if (!m_simulatedTransport) {
+        m_client->disconnectFromServer();
+        m_client->connectToServer(host, port, m_memberId, m_room);
+    }
 }
 
 void TelepartySession::becomeJoined() {
     m_discoverTimer.stop();
+    if (m_isHost && m_hostMemberId.isEmpty()) {
+        m_hostMemberId = m_memberId;
+    }
     setState(State::Joined);
     m_heartbeatTimer.start();
     emit membersChanged();
+    if (!m_hostMemberId.isEmpty()) {
+        emit authorityChanged(m_hostMemberId, m_isHost);
+    }
     emit joinedSession();
     FLUX_LOG_INFO("Teleparty", QString("Joined session %1 (%2 members)").arg(m_code).arg(memberCount()));
 }
@@ -215,7 +238,9 @@ void TelepartySession::handleHostCollision() {
         fail(QStringLiteral("Couldn't create a session. Please try again."));
         return;
     }
-    m_client->disconnectFromServer();
+    if (!m_simulatedTransport) {
+        m_client->disconnectFromServer();
+    }
     m_code = generateCode();
     startSession();
 }
@@ -225,6 +250,7 @@ void TelepartySession::fail(const QString &message) {
     resetConnection();
     m_code.clear();
     m_isHost = false;
+    m_hostMemberId.clear();
     setState(State::Idle);
     emit codeChanged();
     emit membersChanged();
@@ -234,9 +260,12 @@ void TelepartySession::fail(const QString &message) {
 void TelepartySession::resetConnection() {
     m_discoverTimer.stop();
     m_heartbeatTimer.stop();
-    m_client->disconnectFromServer();
+    if (!m_simulatedTransport) {
+        m_client->disconnectFromServer();
+    }
     m_members.clear();
-    m_lastEventId.clear();
+    m_seenSeqOrder.clear();
+    m_seenSeqSet.clear();
     m_helloSent = false;
     m_room.clear();
 }
@@ -248,6 +277,9 @@ void TelepartySession::resetConnection() {
 void TelepartySession::onJoinedRoom(const QString &room, const QString &username, int maxChatLength) {
     if (!username.isEmpty()) {
         m_memberId = username;
+        if (m_isHost) {
+            m_hostMemberId = m_memberId;
+        }
     }
     if (!room.isEmpty()) {
         m_room = room;
@@ -290,7 +322,8 @@ void TelepartySession::onPeerPresent(const QString &username) {
 
 void TelepartySession::onPeerLeft(const QString &username) {
     if (username.isEmpty()) return;
-    m_lastEventId.remove(username);
+    m_seenSeqOrder.remove(username);
+    m_seenSeqSet.remove(username);
     removeMember(username);
 }
 
@@ -321,9 +354,32 @@ bool TelepartySession::isRecognizedEventType(const QString &eventType) {
         QStringLiteral("pause"),
         QStringLiteral("seek"),
         QStringLiteral("state"),
-        QStringLiteral("syncme")
+        QStringLiteral("syncme"),
+        QStringLiteral("ts"),
+        QStringLiteral("rd")
     };
     return kAllowedEvents.contains(eventType);
+}
+
+bool TelepartySession::recordAndCheckDuplicateSeq(const QString &from, qint64 seq) {
+    if (seq <= 0) {
+        return false;
+    }
+
+    QSet<qint64> &seenSet = m_seenSeqSet[from];
+    if (seenSet.contains(seq)) {
+        ++m_duplicateEventCount;
+        return true;
+    }
+
+    QList<qint64> &seenOrder = m_seenSeqOrder[from];
+    seenSet.insert(seq);
+    seenOrder.append(seq);
+    while (seenOrder.size() > kMaxSeenSeqPerPeer) {
+        const qint64 oldest = seenOrder.takeFirst();
+        seenSet.remove(oldest);
+    }
+    return false;
 }
 
 void TelepartySession::onFluxMessage(const QString &senderUsername, const QJsonObject &o) {
@@ -346,7 +402,8 @@ void TelepartySession::onFluxMessage(const QString &senderUsername, const QJsonO
     }
 
     if (type == QLatin1String("bye")) {
-        m_lastEventId.remove(from);
+        m_seenSeqOrder.remove(from);
+        m_seenSeqSet.remove(from);
         removeMember(from);
         return;
     }
@@ -360,9 +417,16 @@ void TelepartySession::onFluxMessage(const QString &senderUsername, const QJsonO
 
     touchMember(from);
 
+    if (o.value(QStringLiteral("h")).toInt(0) == 1) {
+        updateHostAuthority(from);
+    } else if (m_hostMemberId.isEmpty() && !m_isHost) {
+        updateHostAuthority(from);
+    }
+
     if (type == QLatin1String("hello")) {
         // Reset sequence tracking for new / reconnected member
-        m_lastEventId.remove(from);
+        m_seenSeqOrder.remove(from);
+        m_seenSeqSet.remove(from);
         // Let the newcomer know we exist, and let the sync layer share the current state
         publishMessage(makeMessage(QStringLiteral("presence")));
         if (m_state == State::Joined) {
@@ -386,25 +450,24 @@ void TelepartySession::onFluxMessage(const QString &senderUsername, const QJsonO
                 return;
             }
 
-            // Deduplicate events by sequence number per sender
+            // Deduplicate events by sequence number per sender across a bounded window
             const qint64 seq = o.value(QStringLiteral("i")).toInteger(0);
-            if (seq > 0) {
-                if (m_lastEventId.value(from, 0) == seq) {
-                    return; // duplicate event
-                }
-                m_lastEventId.insert(from, seq);
+            if (recordAndCheckDuplicateSeq(from, seq)) {
+                return;
             }
 
-            emit eventReceived(eventType,
-                               o.value(QStringLiteral("d")).toObject().toVariantMap(),
-                               from);
+            QVariantMap data = o.value(QStringLiteral("d")).toObject().toVariantMap();
+            if (seq > 0) {
+                data.insert(QStringLiteral("_seq"), seq);
+            }
+            emit eventReceived(eventType, data, from);
         }
     }
 }
 
 bool TelepartySession::sendEvent(const QString &type, const QVariantMap &data) {
     if (m_state != State::Joined || !isRecognizedEventType(type)) return false;
-    return m_client->sendFluxMessage(makeMessage(QStringLiteral("event"), type, data));
+    return publishMessage(makeMessage(QStringLiteral("event"), type, data));
 }
 
 QJsonObject TelepartySession::makeMessage(const QString &type, const QString &eventType,
@@ -413,24 +476,33 @@ QJsonObject TelepartySession::makeMessage(const QString &type, const QString &ev
     o.insert(QStringLiteral("v"), kProtocolVersion);
     o.insert(QStringLiteral("t"), type);
     o.insert(QStringLiteral("f"), m_memberId);
+    if (m_isHost && (type == QLatin1String("hello") || type == QLatin1String("presence"))) {
+        o.insert(QStringLiteral("h"), 1);
+    }
     if (!eventType.isEmpty()) {
         o.insert(QStringLiteral("i"), ++m_nextEventId);
         o.insert(QStringLiteral("e"), eventType);
         if (!data.isEmpty()) {
-            o.insert(QStringLiteral("d"), QJsonObject::fromVariantMap(data));
+            QVariantMap cleaned = data;
+            cleaned.remove(QStringLiteral("_seq"));
+            o.insert(QStringLiteral("d"), QJsonObject::fromVariantMap(cleaned));
         }
     }
     return o;
 }
 
-void TelepartySession::publishMessage(const QJsonObject &message) {
-    if (!m_room.isEmpty()) {
-        m_client->sendFluxMessage(message);
+bool TelepartySession::publishMessage(const QJsonObject &message) {
+    if (m_room.isEmpty()) {
+        return false;
     }
+    if (m_simulatedTransport) {
+        return m_simulatedTransport(m_memberId, message);
+    }
+    return m_client->sendFluxMessage(message);
 }
 
 // ============================================================================
-// Members
+// Members & Deterministic Host Migration
 // ============================================================================
 
 bool TelepartySession::touchMember(const QString &id) {
@@ -441,22 +513,131 @@ bool TelepartySession::touchMember(const QString &id) {
 }
 
 void TelepartySession::removeMember(const QString &id) {
-    if (m_members.remove(id)) emit membersChanged();
+    if (m_members.remove(id)) {
+        emit membersChanged();
+        emit memberLeft(id);
+        if (id == m_hostMemberId) {
+            electNewHostIfNeeded();
+        }
+    }
 }
 
 void TelepartySession::pruneMembers() {
     const qint64 cutoff = nowMs() - kMemberTimeoutMs;
-    bool changed = false;
+    QStringList removed;
     for (auto it = m_members.begin(); it != m_members.end();) {
         if (it.value() < cutoff) {
-            m_lastEventId.remove(it.key());
+            m_seenSeqOrder.remove(it.key());
+            m_seenSeqSet.remove(it.key());
+            removed.append(it.key());
             it = m_members.erase(it);
-            changed = true;
         } else {
             ++it;
         }
     }
-    if (changed) emit membersChanged();
+    if (!removed.isEmpty()) {
+        emit membersChanged();
+        for (const QString &id : removed) {
+            emit memberLeft(id);
+        }
+        if (removed.contains(m_hostMemberId)) {
+            electNewHostIfNeeded();
+        }
+    }
+}
+
+void TelepartySession::updateHostAuthority(const QString &candidateHostId) {
+    if (candidateHostId.isEmpty() || m_hostMemberId == candidateHostId) {
+        return;
+    }
+    // If we are the host, only yield if we are not yet joined (collision)
+    if (m_isHost && m_state == State::Joined) {
+        return;
+    }
+    m_hostMemberId = candidateHostId;
+    m_isHost = (m_hostMemberId == m_memberId);
+    if (m_state == State::Joined) {
+        emit authorityChanged(m_hostMemberId, m_isHost);
+    }
+}
+
+void TelepartySession::electNewHostIfNeeded() {
+    if (!active()) {
+        return;
+    }
+    // Deterministic leader election: sort all active member IDs in the room
+    // and select the lexicographically lowest ID as the new host.
+    const QStringList candidates = memberIds();
+    if (candidates.isEmpty()) {
+        return;
+    }
+
+    const QString elected = candidates.front();
+    const bool wasHost = m_isHost;
+    m_hostMemberId = elected;
+    m_isHost = (elected == m_memberId);
+
+    FLUX_LOG_INFO("Teleparty",
+                  QString("Host migrated to '%1' (localIsHost=%2)")
+                      .arg(m_hostMemberId, m_isHost ? "true" : "false"));
+
+    if (wasHost != m_isHost) {
+        emit codeChanged();
+    }
+    emit authorityChanged(m_hostMemberId, m_isHost);
+
+    if (m_isHost && m_state == State::Joined) {
+        publishMessage(makeMessage(QStringLiteral("presence")));
+    }
+}
+
+// ============================================================================
+// Simulation Hooks for Deterministic Testing
+// ============================================================================
+
+void TelepartySession::setSimulatedTransport(TransportHook hook) {
+    m_simulatedTransport = std::move(hook);
+}
+
+void TelepartySession::simulateJoinRoom(const QString &code, bool asHost, const QString &fixedMemberId) {
+    setError(QString());
+    m_isHost = asHost;
+    m_code = code.trimmed();
+    m_room = roomNameForCode(m_code);
+    m_memberId = fixedMemberId.isEmpty()
+                     ? (QStringLiteral("FX_") + QUuid::createUuid().toString(QUuid::WithoutBraces).remove('-').left(8))
+                     : fixedMemberId;
+    m_hostMemberId = asHost ? m_memberId : QString();
+    m_members.clear();
+    m_seenSeqOrder.clear();
+    m_seenSeqSet.clear();
+    m_duplicateEventCount = 0;
+    m_helloSent = true;
+    m_discoverTimer.stop();
+    m_heartbeatTimer.stop();
+
+    setState(State::Connecting);
+    emit codeChanged();
+    emit membersChanged();
+
+    publishMessage(makeMessage(QStringLiteral("hello")));
+    becomeJoined();
+}
+
+void TelepartySession::simulateReceiveMessage(const QString &senderUsername, const QJsonObject &payload) {
+    onFluxMessage(senderUsername, payload);
+}
+
+void TelepartySession::simulatePeerLeft(const QString &username) {
+    onPeerLeft(username);
+}
+
+void TelepartySession::simulateDisconnect() {
+    onDisconnected();
+}
+
+void TelepartySession::simulateReconnect() {
+    onJoinedRoom(m_room, m_memberId, SyncplayClient::kDefaultMaxChatLength);
 }
 
 // ============================================================================
