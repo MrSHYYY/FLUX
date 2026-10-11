@@ -285,5 +285,26 @@ target_link_libraries(flux_test_sync_engine PRIVATE
     ${VLC_LIBRARIES}
 )
 
+# Standalone zero-dependency Win32/GDI+ Discord-style Setup Splash Popup
+if(WIN32)
+    add_executable(FluxSetupSplash WIN32
+        src/installer/SetupSplash.cpp
+        resources/flux.rc
+    )
+    set_target_properties(FluxSetupSplash PROPERTIES
+        AUTOMOC OFF
+        AUTOUIC OFF
+        AUTORCC OFF
+        MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>"
+    )
+    target_link_libraries(FluxSetupSplash PRIVATE
+        user32
+        gdi32
+        gdiplus
+        shell32
+        shcore
+    )
+endif()
+
 
 

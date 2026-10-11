@@ -469,9 +469,9 @@ try {
     }
     Log ('running installer (needAdmin=' + $needAdmin + ')')
     if ($needAdmin) {
-        $p = Start-Process -FilePath $setup -ArgumentList ('/S /D=' + $appDir) -Verb RunAs -Wait -PassThru
+        $p = Start-Process -FilePath $setup -ArgumentList ('/S /NOGUI /D=' + $appDir) -Verb RunAs -Wait -PassThru
     } else {
-        $p = Start-Process -FilePath $setup -ArgumentList ('/S /D=' + $appDir) -Wait -PassThru
+        $p = Start-Process -FilePath $setup -ArgumentList ('/S /NOGUI /D=' + $appDir) -Wait -PassThru
     }
     Log ('installer exit code ' + $p.ExitCode)
 } catch { Log ('installer failed: ' + $_.Exception.Message) }
