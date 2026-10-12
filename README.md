@@ -19,7 +19,7 @@
 
 <p align="center">
   <a href="https://github.com/shifatsrm09/FLUX/releases/latest/download/FLUX-Setup.exe" aria-label="Download FLUX setup installer">
-    <img src="resources/download-button.svg" alt="Download setup - Recommended · Windows installer" width="340">
+    <img src="resources/download-button.svg" alt="Download setup - Recommended · Windows installer" width="280">
   </a>
 </p>
 
