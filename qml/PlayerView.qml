@@ -218,6 +218,11 @@ Rectangle {
         anchors.fill: parent
         hoverEnabled: true
         cursorShape: root.showControls ? Qt.ArrowCursor : Qt.BlankCursor
+        // Popup.CloseOnPressOutside closes the menu on press, before onClicked runs.
+        // Remember its state so that same outside click doesn't also toggle playback.
+        property bool menuWasOpenAtPress: false
+
+        onPressed: menuWasOpenAtPress = root.menuOpen
 
         onPositionChanged: root.wakeControls()
 
@@ -225,12 +230,14 @@ Rectangle {
         // click follows. A double click then undoes that toggle and goes fullscreen.
         onClicked: {
             root.wakeControls()
-            if (root.player) root.player.togglePlay()
+            if (!menuWasOpenAtPress && root.player) root.player.togglePlay()
         }
 
         onDoubleClicked: {
-            if (root.player) root.player.togglePlay()
-            root.toggleFullscreenRequested()
+            if (!menuWasOpenAtPress) {
+                if (root.player) root.player.togglePlay()
+                root.toggleFullscreenRequested()
+            }
         }
 
         onWheel: function(wheel) {
