@@ -72,8 +72,9 @@ Item {
             hoverEnabled: true
             cursorShape: navLink.locked ? Qt.ForbiddenCursor : Qt.PointingHandCursor
             onClicked: {
-                // A locked link still reports the click so the app can explain why
-                navLink.clicked()
+                if (!navLink.locked) {
+                    navLink.clicked()
+                }
             }
         }
 
@@ -222,7 +223,7 @@ Item {
                 label: "Library"
                 current: root.section === "library"
                 locked: root.offlineLocked
-                lockedTip: "Leave the Teleparty to open Offline Library videos"
+                lockedTip: "Leave Teleparty to access library"
                 onClicked: root.libraryClicked()
             }
         }

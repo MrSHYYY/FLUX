@@ -28,6 +28,11 @@ ApplicationWindow {
     property string cacheSourceUrl: ""
     property string cacheSourceTitle: ""
     readonly property bool inTeleparty: !!fluxTeleparty && fluxTeleparty.active
+    onInTelepartyChanged: {
+        if (inTeleparty && currentPage === "library") {
+            window.returnToSearch()
+        }
+    }
 
     // Round floating button for the bottom-right dock (optional badge = active downloads)
     component DockButton: Rectangle {
@@ -268,6 +273,9 @@ ApplicationWindow {
     }
 
     function showLibrary() {
+        if (window.inTeleparty) {
+            return
+        }
         if (fluxPlayer) {
             fluxPlayer.pause()
         }
@@ -559,7 +567,7 @@ ApplicationWindow {
             }
             onHomeClicked: window.returnToHome()
             onBookmarksClicked: window.showBookmarks()
-            onLibraryClicked: window.showLibrary()
+            onLibraryClicked: if (!window.inTeleparty) window.showLibrary()
         }
 
         // Bottom-right dock: downloads + settings (browsing pages only)
@@ -600,8 +608,10 @@ ApplicationWindow {
         id: downloadsPanel
 
         onLibraryRequested: {
-            downloadsPanel.close()
-            window.showLibrary()
+            if (!window.inTeleparty) {
+                downloadsPanel.close()
+                window.showLibrary()
+            }
         }
     }
 
