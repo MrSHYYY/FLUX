@@ -741,13 +741,14 @@ Item {
 
                 width: bookmarksGrid.cellWidth
                 height: bookmarksGrid.cellHeight
-                showDownload: true
+                showDownload: !model.isLocal
                 title: model.title
                 parentPath: model.parentPath
                 isFolder: model.isFolder
                 formattedSize: model.formattedSize
                 extension: model.extension
                 playUrl: model.playUrl
+                localPath: model.localPath || ""
                 libraryName: model.libraryName
                 isPlaying: (!!fluxPlayer && fluxPlayer.url === model.playUrl && fluxPlayer.isPlaying)
                 progress: (prog.fraction !== undefined) ? prog.fraction : 0

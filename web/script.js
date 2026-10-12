@@ -106,10 +106,14 @@ async function runNetworkCheck() {
         networkCheckResult.textContent = "Local network access is blocked for this site. Allow it in your browser’s site settings, then try again.";
       } else if (permission === "unsupported") {
         networkCheckResult.textContent = "This browser can’t confirm local network access. Try the latest Chrome or Edge, then allow access if prompted.";
+      } else if (permission === "prompt") {
+        networkCheckResult.textContent = "Allow local network access for this site in your browser’s site settings, then reload and try again.";
       } else if (controller.signal.aborted) {
         networkCheckResult.textContent = "No response from the FLUX network source. Check that you’re on the right network and try again.";
+      } else if (permission === "granted") {
+        networkCheckResult.textContent = "Your browser allows local network access, but 172.16.50.4 didn’t respond. Check your network and try again.";
       } else {
-        networkCheckResult.textContent = "The browser couldn’t reach the FLUX network source. Check its local network permission and try again.";
+        networkCheckResult.textContent = "The browser blocked this local network check. Try the latest Chrome or Edge and allow access for this site.";
       }
       networkCheckIndicator.dataset.state = "failure";
     }

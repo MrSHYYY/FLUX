@@ -62,6 +62,26 @@ QVariant BookmarkManager::data(const QModelIndex &index, int role) const {
     case RawHrefRole:     return e.rawHref;
     case LibraryNameRole: return e.libraryName;
     case GroupRole:       return e.group;
+    case LocalPathRole: {
+        if (e.url.startsWith(QStringLiteral("file:"), Qt::CaseInsensitive)) {
+            QString lp = QUrl(e.url).toLocalFile();
+            if (!lp.isEmpty()) return lp;
+        }
+        if (!e.parentPath.isEmpty() && (e.parentPath.contains(QLatin1String(":\\")) || e.parentPath.contains(QLatin1String(":/")))) {
+            return e.parentPath;
+        }
+        return QString();
+    }
+    case IsLocalRole: {
+        if (e.url.startsWith(QStringLiteral("file:"), Qt::CaseInsensitive)) return true;
+        if (!e.parentPath.isEmpty() && (e.parentPath.contains(QLatin1String(":\\")) || e.parentPath.contains(QLatin1String(":/")))) {
+            return true;
+        }
+        if (!e.url.isEmpty() && !e.url.startsWith(QStringLiteral("http://"), Qt::CaseInsensitive) && !e.url.startsWith(QStringLiteral("https://"), Qt::CaseInsensitive)) {
+            return true;
+        }
+        return false;
+    }
     default:              return QVariant();
     }
 }
@@ -77,6 +97,8 @@ QHash<int, QByteArray> BookmarkManager::roleNames() const {
     roles[RawHrefRole]     = "rawHref";
     roles[LibraryNameRole] = "libraryName";
     roles[GroupRole]       = "group";
+    roles[LocalPathRole]   = "localPath";
+    roles[IsLocalRole]     = "isLocal";
     return roles;
 }
 

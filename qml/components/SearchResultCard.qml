@@ -44,6 +44,29 @@ Item {
         return fluxBookmarks ? fluxBookmarks.isBookmarked(root.playUrl) : false
     }
 
+    // Local media state (disk videos should never show download actions)
+    readonly property bool isLocal: {
+        if (root.localPath.length > 0) return true
+        if (!root.playUrl || root.playUrl.length === 0) return false
+        var u = root.playUrl.toLowerCase()
+        if (u.indexOf("file:") === 0) return true
+        if (u.indexOf("http://") === 0 || u.indexOf("https://") === 0) return false
+        if (root.parentPath.length > 0 && (root.parentPath.indexOf(":\\") >= 0 || root.parentPath.indexOf(":/") >= 0)) return true
+        return false
+    }
+
+    readonly property string effectiveLocalPath: {
+        if (root.localPath.length > 0) return root.localPath
+        if (root.playUrl.length > 0 && root.playUrl.toLowerCase().indexOf("file:") === 0) {
+            var s = root.playUrl.replace(/^file:\/\/\/?/i, "")
+            return decodeURIComponent(s)
+        }
+        if (root.parentPath.length > 0 && (root.parentPath.indexOf(":\\") >= 0 || root.parentPath.indexOf(":/") >= 0)) {
+            return root.parentPath
+        }
+        return ""
+    }
+
     // Parsed presentation values
     readonly property var parsed: Formatter.formatMedia(root.title, root.isFolder, root.formattedSize)
     readonly property var meta: Formatter.describe(root.title, root.isFolder, root.formattedSize)
@@ -463,7 +486,7 @@ Item {
     }
 
     function requestDownload() {
-        if (root.playUrl.length === 0) return
+        if (root.isLocal || root.playUrl.length === 0) return
         root.downloadRequested(root.playUrl, root.title, root.isFolder)
         root.dlFlash = true
         dlFlashTimer.restart()
@@ -483,16 +506,16 @@ Item {
         sourceComponent: CardMenu {
             isFolder: root.isFolder
             bookmarked: root.bookmarked
-            canBookmark: root.localPath.length === 0 || !root.isFolder
-            canDownload: root.localPath.length === 0 && root.playUrl.length > 0
-            canShowInFolder: root.localPath.length > 0
+            canBookmark: root.effectiveLocalPath.length === 0 || !root.isFolder
+            canDownload: !root.isLocal && root.playUrl.length > 0
+            canShowInFolder: root.effectiveLocalPath.length > 0
 
             onOpenRequested: root.activate()
             onBookmarkToggled: root.toggleBookmark()
             onDownloadRequested: root.requestDownload()
             onShowInFolderRequested: {
-                if (fluxDownloads && root.localPath.length > 0) {
-                    fluxDownloads.openPath(root.localPath)
+                if (fluxDownloads && root.effectiveLocalPath.length > 0) {
+                    fluxDownloads.openPath(root.effectiveLocalPath)
                 }
             }
         }
@@ -537,7 +560,7 @@ Item {
     // Download (declared after rowMouse so it sits on top). Plain shapes + a text glyph, so no
     // Canvas is created per card.
     Rectangle {
-        visible: root.showDownload && root.playUrl.length > 0
+        visible: root.showDownload && !root.isLocal && root.playUrl.length > 0
         anchors.right: parent.right
         anchors.top: parent.top
         anchors.rightMargin: 17

@@ -30,7 +30,9 @@ public:
         ExtensionRole,
         RawHrefRole,
         LibraryNameRole,
-        GroupRole
+        GroupRole,
+        LocalPathRole,
+        IsLocalRole
     };
 
     explicit BookmarkManager(QObject *parent = nullptr);
