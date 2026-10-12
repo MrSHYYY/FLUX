@@ -1,4 +1,4 @@
-<h1 align="center">FLUX</h1>
+<h1 align="center"><sup><img src="resources/flux.ico" alt="FLUX logo" width="40" height="40" align="middle"></sup>&nbsp;FLUX</h1>
 
 <p align="center">
   <strong>A media browser and player built for BDIX networks.</strong>
@@ -19,13 +19,12 @@
 
 <p align="center">
   <a href="https://github.com/shifatsrm09/FLUX/releases/latest/download/FLUX-Setup.exe" aria-label="Download FLUX setup installer">
-    <img src="resources/download-button.svg" alt="Download setup - Recommended · Windows installer" width="380">
+    <img src="resources/download-button.svg" alt="Download setup - Recommended · Windows installer" width="340">
   </a>
 </p>
 
 <p align="center">
-  <a href="https://github.com/shifatsrm09/FLUX/releases/latest/download/FLUX-Setup.exe"><strong>Download Latest Setup (.exe)</strong></a>
-  · <a href="https://github.com/shifatsrm09/FLUX/releases/latest">All Releases &amp; Portable (.zip)</a>
+  <a href="https://github.com/shifatsrm09/FLUX/releases/latest">All Releases &amp; Portable (.zip)</a>
   · <a href="#features">Features</a>
   · <a href="#a-look-around">A look around</a>
   · <a href="#teleparty">Teleparty</a>
