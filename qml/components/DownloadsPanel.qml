@@ -4,8 +4,7 @@ import QtQuick.Layouts
 import "Theme.js" as Theme
 
 // Downloads popup (opened from the download button at the bottom-right).
-// Shows only what is downloading right now (scanning, queued or in progress).
-// Finished downloads live in the Library page.
+// Shows active downloads and recent history, with a full download log.
 Popup {
     id: panel
 
@@ -15,6 +14,7 @@ Popup {
     // Distance from the window edge (matches the dock)
     property real edgeMargin: 22
     property real bottomReserve: 82
+    property bool showingLog: false
 
     readonly property real maxHeight: (parent ? parent.height : 600) - bottomReserve - 70
     readonly property int activeCount: fluxDownloads ? fluxDownloads.activeCount : 0
@@ -23,7 +23,8 @@ Popup {
     x: parent ? parent.width - width - edgeMargin : 0
     y: parent ? parent.height - height - bottomReserve : 0
     width: Math.min(460, (parent ? parent.width : 460) - 2 * edgeMargin)
-    height: Math.min(Math.max(240, 62 + list.contentHeight), maxHeight)
+    height: Math.min(Math.max(240, 62 + (showingLog ? logList.contentHeight
+                                                     : list.contentHeight + recentList.contentHeight + recentHeader.height)), maxHeight)
     modal: false
     focus: true
     padding: 0
@@ -64,7 +65,7 @@ Popup {
             }
 
             Text {
-                text: "Downloading"
+                text: panel.showingLog ? "Download history" : "Downloads"
                 color: Theme.text
                 font.pixelSize: 17
                 font.weight: Font.Bold
@@ -91,6 +92,21 @@ Popup {
 
             Item { Layout.fillWidth: true }
 
+            FluxButton {
+                text: panel.showingLog ? "Back" : "Download log"
+                variant: "ghost"
+                implicitHeight: 34
+                onClicked: panel.showingLog = !panel.showingLog
+            }
+
+            FluxButton {
+                visible: panel.showingLog && fluxDownloads && fluxDownloads.history.length > 0
+                text: "Clear list"
+                variant: "ghost"
+                implicitHeight: 34
+                onClicked: fluxDownloads.clearHistory()
+            }
+
             IconButton {
                 iconName: "close"
                 iconSize: 16
@@ -116,8 +132,12 @@ Popup {
             ListView {
                 id: list
 
-                anchors.fill: parent
+                anchors.left: parent.left
+                anchors.right: parent.right
+                anchors.top: parent.top
+                height: contentHeight
                 clip: true
+                visible: !panel.showingLog
                 model: fluxDownloads
                 spacing: 0
                 boundsBehavior: Flickable.StopAtBounds
@@ -279,6 +299,120 @@ Popup {
                                 onClicked: fluxDownloads.cancel(row.jobId)
                             }
                         }
+
+                    }
+
+                    Rectangle {
+                        anchors.left: parent.left
+                        anchors.right: parent.right
+                        anchors.bottom: parent.bottom
+                        anchors.leftMargin: 20
+                        height: 1
+                        color: Theme.border
+                    }
+                }
+            }
+
+            Rectangle {
+                id: recentHeader
+                anchors.left: parent.left
+                anchors.right: parent.right
+                anchors.top: list.bottom
+                height: !panel.showingLog && recentList.count > 0 ? 36 : 0
+                visible: height > 0
+                color: "transparent"
+
+                Text {
+                    anchors.left: parent.left
+                    anchors.leftMargin: 20
+                    anchors.verticalCenter: parent.verticalCenter
+                    text: "Recent downloads"
+                    color: Theme.textMute
+                    font.pixelSize: 11
+                    font.weight: Font.Bold
+                    font.letterSpacing: 0.7
+                }
+            }
+
+            ListView {
+                id: recentList
+                anchors.left: parent.left
+                anchors.right: parent.right
+                anchors.top: recentHeader.bottom
+                height: panel.showingLog ? 0 : contentHeight
+                visible: !panel.showingLog
+                clip: true
+                model: fluxDownloads ? fluxDownloads.recentHistory : []
+                interactive: false
+                delegate: historyRow
+            }
+
+            ListView {
+                id: logList
+                anchors.fill: parent
+                visible: panel.showingLog
+                clip: true
+                model: fluxDownloads ? fluxDownloads.history : []
+                spacing: 0
+                boundsBehavior: Flickable.StopAtBounds
+                ScrollBar.vertical: FluxScrollBar { }
+                delegate: historyRow
+            }
+
+            Component {
+                id: historyRow
+                Item {
+                    required property var modelData
+                    width: ListView.view.width
+                    height: 64
+
+                    RowLayout {
+                        anchors.fill: parent
+                        anchors.leftMargin: 20
+                        anchors.rightMargin: 16
+                        spacing: 12
+
+                        FluxIcon {
+                            name: modelData.kind === "pack" ? "folder" : "download"
+                            size: 18
+                            color: Theme.textDim
+                        }
+
+                        ColumnLayout {
+                            Layout.fillWidth: true
+                            spacing: 3
+                            Text {
+                                text: modelData.title || "Download"
+                                color: Theme.text
+                                font.pixelSize: 13
+                                font.weight: Font.DemiBold
+                                elide: Text.ElideMiddle
+                                Layout.fillWidth: true
+                            }
+                            Text {
+                                text: (modelData.status === "done" ? "Completed" :
+                                       modelData.status === "interrupted" ? "Interrupted" :
+                                       modelData.status === "failed" ? "Failed" :
+                                       modelData.status === "cancelled" ? "Cancelled" : modelData.status)
+                                      + " · " + (modelData.detail || "")
+                                color: Theme.textDim
+                                font.pixelSize: 11
+                                elide: Text.ElideRight
+                                Layout.fillWidth: true
+                            }
+                        }
+
+                        IconButton {
+                            visible: !!modelData.sourceUrl
+                                     && (modelData.status === "interrupted" || modelData.status === "failed")
+                            iconName: "play"
+                            iconSize: 15
+                            implicitWidth: 34
+                            implicitHeight: 34
+                            tip: "Resume download"
+                            tipAbove: false
+                            onClicked: fluxDownloads.resumeHistory(modelData.key)
+                        }
                     }
 
                     Rectangle {
@@ -297,7 +431,7 @@ Popup {
                 anchors.centerIn: parent
                 width: parent.width - 60
                 spacing: 8
-                visible: panel.activeCount === 0
+                visible: !panel.showingLog && panel.activeCount === 0 && recentList.count === 0
 
                 FluxIcon {
                     name: "download"
@@ -307,7 +441,7 @@ Popup {
                 }
 
                 Text {
-                    text: "Nothing downloading"
+                    text: "No downloads yet"
                     color: Theme.text
                     font.pixelSize: 15
                     font.weight: Font.DemiBold
@@ -315,7 +449,7 @@ Popup {
                 }
 
                 Text {
-                    text: "Hover over a movie, episode or folder and click its download button. Finished downloads are in your Library."
+                    text: "Hover over a movie, episode or folder and click its download button."
                     color: Theme.textMute
                     font.pixelSize: 12
                     horizontalAlignment: Text.AlignHCenter

@@ -42,6 +42,7 @@ ApplicationWindow {
         property string tip: ""
         property int badge: 0
         property bool active: false
+        property bool attention: false
         signal clicked()
 
         width: 48
@@ -64,6 +65,20 @@ ApplicationWindow {
             rotation: (dockBtn.iconName === "settings" && dockMouse.containsMouse) ? 30 : 0
 
             Behavior on rotation { NumberAnimation { duration: 260; easing.type: Easing.OutCubic } }
+        }
+
+        Rectangle {
+            visible: dockBtn.attention
+            anchors.right: parent.right
+            anchors.top: parent.top
+            anchors.rightMargin: 7
+            anchors.topMargin: 7
+            width: 9
+            height: 9
+            radius: 5
+            color: "#FF4D5E"
+            border.width: 1
+            border.color: Theme.bg
         }
 
         Rectangle {
@@ -586,6 +601,9 @@ ApplicationWindow {
                 iconName: "download"
                 tip: "Downloads"
                 badge: fluxDownloads ? fluxDownloads.activeCount : 0
+                attention: !!fluxDownloads && fluxDownloads.history.some(function(entry) {
+                    return entry.status === "interrupted" || entry.status === "failed"
+                })
                 active: downloadsPanel.opened
                 onClicked: downloadsPanel.opened ? downloadsPanel.close() : downloadsPanel.open()
             }

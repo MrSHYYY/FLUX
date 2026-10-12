@@ -18,6 +18,8 @@
 #include <QSettings>
 #include <QStringList>
 #include <QTimer>
+#include <QDateTime>
+#include <QUuid>
 #include <algorithm>
 
 namespace Flux {
@@ -190,6 +192,8 @@ DownloadManager::DownloadManager(FolderBrowser *browser, QObject *parent)
     : QAbstractListModel(parent)
     , m_browser(browser) {
     m_root = QDir::cleanPath(QDir::fromNativeSeparators(defaultLocation()));
+    QSettings settings;
+    m_history = settings.value(QStringLiteral("downloads/history")).toList();
     ensureFolders();
     FLUX_LOG_INFO("Downloads", QString("Download location: %1").arg(native(m_root)));
 }
@@ -205,6 +209,13 @@ DownloadManager::~DownloadManager() {
             r->abort();
         }
         closePart(*job, false);
+        const bool active = job->status == Status::Scanning || job->status == Status::Queued
+                            || job->status == Status::Running || job->status == Status::Paused;
+        if (active) {
+            if (!job->partPath.isEmpty() && QFileInfo::exists(job->partPath))
+                job->curBytes = QFileInfo(job->partPath).size();
+            recordHistory(*job, QStringLiteral("interrupted"));
+        }
     }
 }
 
@@ -393,6 +404,53 @@ void DownloadManager::updateSummary() {
     m_activeCount = active;
     m_hasFinished = finished;
     emit summaryChanged();
+}
+
+void DownloadManager::recordHistory(const Job &job, const QString &statusOverride) {
+    const QString key = job.historyKey.isEmpty() ? QUuid::createUuid().toString(QUuid::WithoutBraces)
+                                                 : job.historyKey;
+    QVariantMap entry;
+    entry.insert(QStringLiteral("key"), key);
+    entry.insert(QStringLiteral("title"), job.title);
+    entry.insert(QStringLiteral("kind"), job.isPack ? QStringLiteral("pack") : QStringLiteral("file"));
+    entry.insert(QStringLiteral("category"), job.category);
+    entry.insert(QStringLiteral("status"), statusOverride.isEmpty() ? statusName(job.status) : statusOverride);
+    const double progress = progressOf(job);
+    entry.insert(QStringLiteral("progress"), progress);
+    QString detail = detailOf(job);
+    if (statusOverride == QStringLiteral("interrupted")) {
+        const bool percentageKnown = (job.sizesKnown && job.totalBytes > 0)
+                                     || job.items.size() > 1 || job.curTotal > 0;
+        detail = percentageKnown
+                 ? QStringLiteral("Interrupted · %1% completed · %2")
+                       .arg(qRound(progress * 100.0))
+                       .arg(SearchResult::formatBytes(job.doneBytes + job.curBytes))
+                 : QStringLiteral("Interrupted · %1 downloaded")
+                       .arg(SearchResult::formatBytes(job.doneBytes + job.curBytes));
+    } else if (job.status == Status::Failed || job.status == Status::Cancelled) {
+        detail += QStringLiteral(" · %1% completed · %2")
+                      .arg(qRound(progress * 100.0))
+                      .arg(SearchResult::formatBytes(job.doneBytes + job.curBytes));
+    }
+    entry.insert(QStringLiteral("detail"), detail);
+    entry.insert(QStringLiteral("destination"), native(job.destDir));
+    entry.insert(QStringLiteral("sourceUrl"), job.sourceUrl);
+    if (!job.isPack && !job.items.empty())
+        entry.insert(QStringLiteral("fileName"), job.items.front().relPath);
+    entry.insert(QStringLiteral("timestamp"), QDateTime::currentDateTime());
+
+    for (qsizetype i = m_history.size() - 1; i >= 0; --i) {
+        if (m_history.at(i).toMap().value(QStringLiteral("key")).toString() == key)
+            m_history.removeAt(i);
+    }
+    m_history.prepend(entry);
+    saveHistory();
+    emit historyChanged();
+}
+
+void DownloadManager::saveHistory() const {
+    QSettings settings;
+    settings.setValue(QStringLiteral("downloads/history"), m_history);
 }
 
 // ============================================================================
@@ -940,6 +998,7 @@ int DownloadManager::downloadFile(const QString &url, const QString &title) {
 
     auto job = std::make_unique<Job>();
     job->id = ++m_nextId;
+    job->historyKey = QUuid::createUuid().toString(QUuid::WithoutBraces);
     job->title = name;
     job->sourceUrl = url;
     job->category = QStringLiteral("Individuals");
@@ -973,6 +1032,7 @@ int DownloadManager::downloadPack(const QString &folderUrl, const QString &title
 
     auto job = std::make_unique<Job>();
     job->id = ++m_nextId;
+    job->historyKey = QUuid::createUuid().toString(QUuid::WithoutBraces);
     job->title = name;
     job->sourceUrl = url;
     job->category = QStringLiteral("Series");
@@ -1121,6 +1181,7 @@ void DownloadManager::failJob(Job &job, const QString &message) {
     job.error = message;
     job.note.clear();
     job.speed = 0.0;
+    recordHistory(job);
     FLUX_LOG_WARN("Downloads", QString("'%1' failed: %2").arg(job.title, message));
     touch(job);
     updateSummary();
@@ -1132,6 +1193,7 @@ void DownloadManager::finishJob(Job &job) {
     job.note.clear();
     job.speed = 0.0;
     job.curBytes = 0;
+    recordHistory(job);
     FLUX_LOG_INFO("Downloads", QString("Completed '%1' -> %2").arg(job.title, native(job.destDir)));
     touch(job);
     updateSummary();
@@ -1517,6 +1579,7 @@ void DownloadManager::cancel(int id) {
         r->abort();
     }
     closePart(*job, true);             // an abandoned download shouldn't leave a .part behind
+    recordHistory(*job);
 
     FLUX_LOG_INFO("Downloads", QString("Cancelled '%1'").arg(job->title));
     touch(*job);
@@ -1575,6 +1638,74 @@ void DownloadManager::clearFinished() {
         }
     }
     updateSummary();
+}
+
+void DownloadManager::clearHistory() {
+    m_history.clear();
+    saveHistory();
+    emit historyChanged();
+}
+
+bool DownloadManager::resumeHistory(const QString &key) {
+    for (const QVariant &value : m_history) {
+        const QVariantMap entry = value.toMap();
+        if (entry.value(QStringLiteral("key")).toString() != key) continue;
+
+        const QString oldStatus = entry.value(QStringLiteral("status")).toString();
+        if (oldStatus != QStringLiteral("interrupted") && oldStatus != QStringLiteral("failed"))
+            return false;
+
+        const QString url = entry.value(QStringLiteral("sourceUrl")).toString();
+        if (url.isEmpty()) return false;
+        if (Job *duplicate = findActiveBySource(url)) {
+            if (duplicate->status == Status::Paused) resume(duplicate->id);
+            return true;
+        }
+
+        auto job = std::make_unique<Job>();
+        job->id = ++m_nextId;
+        job->historyKey = key;
+        job->title = entry.value(QStringLiteral("title")).toString();
+        job->sourceUrl = url;
+        job->category = entry.value(QStringLiteral("category")).toString();
+        job->destDir = QDir::cleanPath(QDir::fromNativeSeparators(
+            entry.value(QStringLiteral("destination")).toString()));
+        job->isPack = entry.value(QStringLiteral("kind")).toString() == QStringLiteral("pack");
+
+        if (job->isPack) {
+            job->status = Status::Scanning;
+            job->pendingLists = 1;
+            job->scanGen = 1;
+        } else {
+            Item item;
+            item.url = url;
+            item.relPath = entry.value(QStringLiteral("fileName")).toString();
+            if (item.relPath.isEmpty()) {
+                QString name = QUrl::fromPercentEncoding(url.toUtf8());
+                name = name.mid(name.lastIndexOf('/') + 1);
+                item.relPath = sanitizeSegment(name.isEmpty() ? job->title : name);
+            }
+            job->items.push_back(item);
+            job->status = Status::Queued;
+        }
+
+        const int id = job->id;
+        const QString source = job->sourceUrl;
+        const bool isPack = job->isPack;
+        const QString destination = job->destDir;
+        const QString title = job->title;
+        insertJob(std::move(job));
+        if (Job *restored = findJob(id)) recordHistory(*restored);
+
+        if (isPack) {
+            scanFolder(id, source, QString(), 0, 1);
+        } else {
+            pump();
+        }
+        FLUX_LOG_INFO("Downloads", QString("Resuming '%1' -> %2").arg(title, native(destination)));
+        return true;
+    }
+    return false;
 }
 
 } // namespace Flux

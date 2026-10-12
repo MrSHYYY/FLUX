@@ -37,6 +37,8 @@ class DownloadManager : public QAbstractListModel {
     Q_PROPERTY(int activeCount READ activeCount NOTIFY summaryChanged)
     Q_PROPERTY(int count READ count NOTIFY summaryChanged)
     Q_PROPERTY(bool hasFinished READ hasFinished NOTIFY summaryChanged)
+    Q_PROPERTY(QVariantList history READ history NOTIFY historyChanged)
+    Q_PROPERTY(QVariantList recentHistory READ recentHistory NOTIFY historyChanged)
     // Bumps whenever the set of downloaded files may have changed (offline library refresh)
     Q_PROPERTY(int offlineRevision READ offlineRevision NOTIFY offlineChanged)
     // Extra folders (anywhere on the PC) scanned for playable media. Completely separate from
@@ -72,6 +74,8 @@ public:
     int activeCount() const { return m_activeCount; }
     int count() const { return static_cast<int>(m_jobs.size()); }
     bool hasFinished() const { return m_hasFinished; }
+    QVariantList history() const { return m_history; }
+    QVariantList recentHistory() const { return m_history.mid(0, 5); }
     int offlineRevision() const { return m_offlineRevision; }
     QStringList targets() const;   // native paths
     void setTargets(const QStringList &paths);   // restore saved targets (no validation errors)
@@ -116,6 +120,8 @@ public:
     Q_INVOKABLE void retry(int id);
     Q_INVOKABLE void remove(int id);
     Q_INVOKABLE void clearFinished();
+    Q_INVOKABLE void clearHistory();
+    Q_INVOKABLE bool resumeHistory(const QString &key);
     Q_INVOKABLE void openFolder(int id);
 
 signals:
@@ -123,6 +129,7 @@ signals:
     void summaryChanged();
     void offlineChanged();
     void targetsChanged();
+    void historyChanged();
     void targetError(const QString &message);
     void locationError(const QString &message);
 
@@ -138,6 +145,7 @@ private:
 
     struct Job {
         int id = 0;
+        QString historyKey;
         QString title;
         QString sourceUrl;
         QString category;      // "Series" | "Individuals"
@@ -187,6 +195,8 @@ private:
     void insertJob(std::unique_ptr<Job> job);
     void touch(const Job &job);
     void updateSummary();
+    void recordHistory(const Job &job, const QString &statusOverride = QString());
+    void saveHistory() const;
     void ensureFolders() const;
 
     void scanFolder(int id, const QString &folderUrl, const QString &rel, int depth, int gen);
@@ -220,6 +230,7 @@ private:
     bool m_pumping = false;
     bool m_pumpAgain = false;
     bool m_shuttingDown = false;
+    QVariantList m_history;
 };
 
 } // namespace Flux
