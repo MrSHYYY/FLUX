@@ -639,10 +639,6 @@ Rectangle {
         Behavior on opacity { NumberAnimation { duration: 260; easing.type: Easing.OutCubic } }
         Behavior on scale { NumberAnimation { duration: 320; easing.type: Easing.OutCubic } }
 
-        onStartOver: {
-            if (root.player) root.player.seek(0)
-            root.resumeToastVisible = false
-        }
     }
 
     NextEpisodeCard {

@@ -120,6 +120,19 @@ Item {
                 focusPolicy: Qt.NoFocus
                 hoverEnabled: true
 
+                // Slider input can replace its initial QML value binding. Keep it
+                // explicitly aligned with the player's optimistic resume position.
+                Connections {
+                    target: root.player
+                    function onPositionChanged() {
+                        if (root.player) seekSlider.value = root.player.position
+                    }
+                }
+
+                Component.onCompleted: {
+                    if (root.player) seekSlider.value = root.player.position
+                }
+
                 readonly property bool engaged: seekSlider.hovered || seekSlider.pressed
 
                 HoverHandler { id: seekHover }

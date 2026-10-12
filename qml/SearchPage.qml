@@ -12,6 +12,16 @@ Item {
 
     signal playMediaRequested(string url, string title)
 
+    function watchedTimeLabel(milliseconds) {
+        var totalSeconds = Math.floor(milliseconds / 1000)
+        var totalMinutes = Math.floor(milliseconds / 60000)
+        var hours = Math.floor(totalMinutes / 60)
+        var minutes = totalMinutes % 60
+        if (hours > 0) return "Watched " + hours + "h " + minutes + "m"
+        if (totalMinutes === 0) return "Watched " + totalSeconds + " sec"
+        return "Watched " + totalMinutes + " min"
+    }
+
     // Downloads: a single file goes to Individuals, a folder (pack) goes to Series
     function startDownload(url, title, isPack) {
         if (!fluxDownloads) return
@@ -269,13 +279,19 @@ Item {
                         height: 176
                         title: modelData.title
                         playUrl: modelData.url
+                        isFolder: modelData.isFolder === true
                         progress: modelData.fraction
-                        showRemove: true
-                        extraInfo: Math.max(1, Math.round((modelData.durationMs - modelData.positionMs) / 60000)) + " min left"
+                        showRemove: modelData.isFolder !== true
+                        extraInfo: modelData.isFolder === true ? "Series" :
+                                   root.watchedTimeLabel(modelData.positionMs)
                         introDelay: Math.min(index, 8) * 45
 
                         onPlayRequested: function(url, itemTitle) {
                             root.playMediaRequested(url, itemTitle)
+                        }
+
+                        onFolderRequested: function(url, libName) {
+                            if (fluxBrowser) fluxBrowser.open(url, libName, "")
                         }
 
                         onRemoveRequested: function(url) {

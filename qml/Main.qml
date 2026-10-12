@@ -183,7 +183,9 @@ ApplicationWindow {
         // Read the saved position BEFORE noteStart() touches the history entry.
         // In a Teleparty everyone starts together from the beginning.
         var resumeMs = (!window.inTeleparty && fluxUser) ? fluxUser.resumePositionFor(sourceUrl) : 0
-        if (fluxUser) fluxUser.noteStart(sourceUrl, title)
+        var resumeProgress = (resumeMs > 0 && fluxUser) ? fluxUser.progressFor(sourceUrl) : ({})
+        var resumeFraction = resumeProgress.fraction > 0 ? resumeProgress.fraction : -1
+        if (fluxUser) fluxUser.noteStart(sourceUrl, title, playbackUrl)
 
         // Look up the next episode in the background (for the "Up next" card)
         if (fluxBrowser) fluxBrowser.findNext(sourceUrl)
@@ -192,7 +194,7 @@ ApplicationWindow {
 
         if (fluxPlayer) {
             if (resumeMs > 0) {
-                fluxPlayer.playFrom(playbackUrl, resumeMs)
+                fluxPlayer.playFrom(playbackUrl, resumeMs, resumeFraction)
             } else {
                 fluxPlayer.play(playbackUrl)
             }

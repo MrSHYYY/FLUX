@@ -320,15 +320,40 @@ VLCPlayer::VLCPlayer(QObject *parent)
         // While a seek is pending/settling, libVLC keeps reporting the OLD position for a
         // moment. Ignoring it stops the slider and clock jumping back and forth (the
         // brief "freeze" feel after seeking).
-        if (!seekGuardActive()) {
-            qint64 t = libvlc_media_player_get_time(m_mediaPlayer);
+        const qint64 t = libvlc_media_player_get_time(m_mediaPlayer);
+        const float reportedPosition = libvlc_media_player_get_position(m_mediaPlayer);
+        if (m_resumePositionPending) {
+            const qreal positionTolerance = m_durationMs > 0
+                    ? 750.0 / static_cast<qreal>(m_durationMs) : 0.0001;
+            const qreal minimumPosition = std::max<qreal>(0.0, m_position - positionTolerance);
+            const bool timeReached = t >= 0 && t >= m_resumeTargetMs - 750;
+            const bool positionReached = reportedPosition >= 0.0f
+                    && static_cast<qreal>(reportedPosition) >= minimumPosition;
+            const bool guardExpired = m_uptime.elapsed() >= m_resumeGuardDeadline;
+            if ((timeReached && positionReached) || (guardExpired && t >= 0)) {
+                m_resumePositionPending = false;
+                m_seekGuardUntil = 0;
+                if (t >= 0) {
+                    m_timeMs = t;
+                    if (m_durationMs > 0) {
+                        m_position = std::clamp(static_cast<qreal>(t) / m_durationMs, 0.0, 1.0);
+                    }
+                    emit timeChanged();
+                    emit positionChanged();
+                }
+            }
+        }
+
+        if (!m_resumePositionPending && !seekGuardActive()) {
             if (t >= 0 && t != m_timeMs) {
                 m_timeMs = t;
                 emit timeChanged();
             }
 
-            float p = libvlc_media_player_get_position(m_mediaPlayer);
-            if (p >= 0.0f && std::abs(p - static_cast<float>(m_position)) > 0.001f) {
+            const float p = reportedPosition;
+            // 0.001 is several seconds on a feature-length movie, which makes
+            // the progress bar visibly trail playback after a resume.
+            if (p >= 0.0f && std::abs(p - static_cast<float>(m_position)) > 0.00005f) {
                 m_position = p;
                 emit positionChanged();
             }
@@ -338,6 +363,10 @@ VLCPlayer::VLCPlayer(QObject *parent)
         if (len > 0 && len != m_durationMs) {
             m_durationMs = len;
             emit durationChanged();
+            if (m_timeMs > 0) {
+                m_position = std::clamp(static_cast<qreal>(m_timeMs) / static_cast<qreal>(m_durationMs), 0.0, 1.0);
+                emit positionChanged();
+            }
             updateTracks();
         }
 
@@ -536,6 +565,10 @@ void VLCPlayer::handleVlcEvent(const libvlc_event_t *event, void *opaque) {
         QMetaObject::invokeMethod(player, [player, len]() {
             player->m_durationMs = len;
             emit player->durationChanged();
+            if (player->m_timeMs > 0 && len > 0) {
+                player->m_position = std::clamp(static_cast<qreal>(player->m_timeMs) / len, 0.0, 1.0);
+                emit player->positionChanged();
+            }
             player->updateTracks();
         }, Qt::QueuedConnection);
         break;
@@ -559,6 +592,12 @@ void VLCPlayer::setUrl(const QString &url) {
 }
 
 void VLCPlayer::play(const QString &mediaUrl) {
+    // Stop the previous source before changing m_url so progress tracking can still
+    // associate the player's final clock position with the media that is ending.
+    const bool stoppedBeforeUrlChange = !m_simulatedMode
+            && !mediaUrl.isEmpty() && mediaUrl != m_url;
+    if (stoppedBeforeUrlChange) stop();
+
     if (!mediaUrl.isEmpty()) {
         setUrl(mediaUrl);
     }
@@ -575,13 +614,17 @@ void VLCPlayer::play(const QString &mediaUrl) {
 
     if (m_simulatedMode) {
         const qint64 startMs = m_startTimeMs;
+        const qreal startPosition = m_startPosition;
         m_startTimeMs = 0;
+        m_startPosition = -1.0;
         m_hasPendingSeek = false;
         m_simulatedSubMsRemainder = 0.0;
         m_timeMs = std::max<qint64>(0, startMs);
         if (m_durationMs <= 0) m_durationMs = 7200000;
-        m_position = static_cast<qreal>(m_timeMs) / static_cast<qreal>(m_durationMs);
-        m_simulatedSeekGuardUntilMs = (startMs > 1000) ? (m_simulatedClockMs + 700) : 0;
+        m_position = startPosition >= 0.0
+                ? startPosition
+                : static_cast<qreal>(m_timeMs) / static_cast<qreal>(m_durationMs);
+        m_simulatedSeekGuardUntilMs = (startMs >= 1000) ? (m_simulatedClockMs + 700) : 0;
         m_state = QStringLiteral("Opening");
         m_isBuffering = true;
         m_bufferingPercent = 0.0f;
@@ -601,7 +644,7 @@ void VLCPlayer::play(const QString &mediaUrl) {
 
     FLUX_LOG_INFO("VLCPlayer", QString("Starting direct stream: %1").arg(m_url));
 
-    stop();
+    if (!stoppedBeforeUrlChange) stop();
 
     if (m_currentMedia) {
         libvlc_media_release(m_currentMedia);
@@ -633,8 +676,10 @@ void VLCPlayer::play(const QString &mediaUrl) {
     // Resume: begin directly at the saved position instead of starting at 0 and seeking
     // (avoids a wasted buffer at the start of the file). One-shot.
     const qint64 startMs = m_startTimeMs;
+    const qreal startPosition = m_startPosition;
     m_startTimeMs = 0;
-    if (startMs > 1000) {
+    m_startPosition = -1.0;
+    if (startMs >= 1000) {
         const QByteArray startOpt = QString(":start-time=%1").arg(static_cast<double>(startMs) / 1000.0, 0, 'f', 2).toUtf8();
         libvlc_media_add_option(m_currentMedia, startOpt.constData());
         FLUX_LOG_INFO("VLCPlayer", QString("Resuming from %1 ms").arg(startMs));
@@ -654,10 +699,21 @@ void VLCPlayer::play(const QString &mediaUrl) {
     m_autoTrackAttempts = 0;
 
     // Show the resume position immediately instead of flashing 00:00
-    if (startMs > 1000) {
+    if (startMs >= 1000) {
         m_timeMs = startMs;
+        if (startPosition >= 0.0) {
+            m_position = std::clamp(startPosition, 0.0, 1.0);
+        } else if (m_durationMs > 0) {
+            m_position = std::clamp(static_cast<qreal>(startMs) / static_cast<qreal>(m_durationMs), 0.0, 1.0);
+        }
         emit timeChanged();
+        emit positionChanged();
+        m_resumeTargetMs = startMs;
+        m_resumeGuardDeadline = m_uptime.elapsed() + 15000;
+        m_resumePositionPending = true;
         m_seekGuardUntil = m_uptime.elapsed() + 2000;
+    } else {
+        m_resumePositionPending = false;
     }
 
     m_state = "Opening";
@@ -752,6 +808,8 @@ void VLCPlayer::togglePlay() {
 }
 
 void VLCPlayer::stop() {
+    emit aboutToStop();
+    m_resumePositionPending = false;
     endSeekMute();
     if (std::abs(m_playbackRate - 1.0) > 0.0005) {
         m_playbackRate = 1.0;
@@ -804,6 +862,7 @@ bool VLCPlayer::isSeekSettling() const {
 
 void VLCPlayer::seek(qreal pos) {
     if (!m_mediaPlayer && !m_simulatedMode) return;
+    m_resumePositionPending = false;
     pos = std::clamp(pos, 0.0, 1.0);
 
     m_pendingIsTime = false;
@@ -831,6 +890,7 @@ void VLCPlayer::seek(qreal pos) {
 
 void VLCPlayer::seekRelative(qint64 deltaMs) {
     if (!m_mediaPlayer && !m_simulatedMode) return;
+    m_resumePositionPending = false;
 
     // m_timeMs already includes any seek that is still pending, so repeated presses
     // accumulate (e.g. 6 presses of +10s become a single +60s seek).
@@ -938,11 +998,9 @@ bool VLCPlayer::isPaused() const {
 }
 
 qreal VLCPlayer::position() const {
-    if (m_simulatedMode) return m_position;
-    if (!m_mediaPlayer) return 0.0;
-    if (seekGuardActive()) return m_position;   // our own value is newer than libVLC's
-    float p = libvlc_media_player_get_position(m_mediaPlayer);
-    return (p >= 0.0f) ? static_cast<qreal>(p) : 0.0;
+    // The poll loop owns timeline updates. Reading libVLC directly here can
+    // expose its stale pre-resume position between polls and rewind the slider.
+    return m_position;
 }
 
 void VLCPlayer::setPosition(qreal pos) {
@@ -1026,8 +1084,9 @@ void VLCPlayer::updateTracks() {
     applyLanguagePreferences();
 }
 
-void VLCPlayer::playFrom(const QString &url, qint64 startMs) {
+void VLCPlayer::playFrom(const QString &url, qint64 startMs, qreal startPosition) {
     m_startTimeMs = std::max<qint64>(0, startMs);
+    m_startPosition = startPosition >= 0.0 ? std::clamp(startPosition, 0.0, 1.0) : -1.0;
     play(url);
 }
 
@@ -1047,6 +1106,7 @@ void VLCPlayer::remoteResume() {
 
 void VLCPlayer::remoteSeekTo(qint64 timeMs) {
     if (!m_mediaPlayer && !m_simulatedMode) return;
+    m_resumePositionPending = false;
 
     qint64 newTime = std::max<qint64>(0, timeMs);
     if (m_durationMs > 1000) {

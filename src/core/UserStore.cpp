@@ -10,6 +10,8 @@
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QSaveFile>
+#include <QRegularExpression>
+#include <QStringList>
 #include <QUrl>
 #include <algorithm>
 #include <vector>
@@ -17,10 +19,45 @@
 namespace Flux {
 
 namespace {
-constexpr qint64 kMinResumeMs = 30000;       // under 30s in: not worth resuming
+constexpr qint64 kMinResumeMs = 1000;
 constexpr double kWatchedFraction = 0.93;    // past 93% counts as watched
 constexpr int kMaxHistoryEntries = 300;
 constexpr int kMaxContinueEntries = 24;
+
+struct SeriesLocation {
+    QString key;
+    QString url;
+    QString title;
+};
+
+SeriesLocation seriesLocation(const QString &mediaUrl) {
+    QUrl url(mediaUrl, QUrl::TolerantMode);
+    if (url.scheme() != QLatin1String("http") && url.scheme() != QLatin1String("https"))
+        return {};
+    QStringList parts = url.path(QUrl::FullyDecoded).split('/', Qt::SkipEmptyParts);
+    if (parts.size() < 2) return {};
+
+    const QString episodeName = parts.constLast();
+    static const QRegularExpression episodeRe(
+        QStringLiteral("(?:\\bS\\d{1,2}\\s*E\\d{1,3}\\b|\\b\\d{1,2}x\\d{1,3}\\b)"),
+        QRegularExpression::CaseInsensitiveOption);
+    if (!episodeRe.match(episodeName).hasMatch()) return {};
+
+    parts.removeLast(); // the episode file's parent folder
+    if (parts.size() < 3) return {}; // Avoid treating a category folder as a show's folder.
+
+    static const QRegularExpression seasonRe(
+        QStringLiteral("^(?:season|series|s)[\\s._-]*\\d{1,2}(?:\\b.*)?$"),
+        QRegularExpression::CaseInsensitiveOption);
+    if (parts.size() > 1 && seasonRe.match(parts.constLast()).hasMatch())
+        parts.removeLast();
+    if (parts.isEmpty()) return {};
+
+    const QString folderPath = QLatin1Char('/') + parts.join(QLatin1Char('/')) + QLatin1Char('/');
+    url.setPath(folderPath);
+    const QString folderUrl = url.toString(QUrl::FullyEncoded);
+    return {folderUrl.toCaseFolded(), folderUrl, QUrl::fromPercentEncoding(parts.constLast().toUtf8())};
+}
 }
 
 UserStore::UserStore(QObject *parent)
@@ -75,6 +112,14 @@ void UserStore::attachPlayer(VLCPlayer *player) {
     m_player = player;
     if (!m_player) return;
     connect(m_player, &VLCPlayer::stateChanged, this, &UserStore::onPlayerStateChanged);
+    connect(m_player, &VLCPlayer::userSeeked, this, [this](qint64) {
+        checkpoint(true, true);
+        writeHistory();
+    });
+    connect(m_player, &VLCPlayer::aboutToStop, this, [this]() {
+        checkpoint(true);
+        writeHistory();
+    });
 }
 
 void UserStore::onPlayerStateChanged() {
@@ -89,7 +134,7 @@ void UserStore::onPlayerStateChanged() {
     if (st == QLatin1String("Ended")) {
         m_tickTimer.stop();
         auto it = m_history.find(m_currentKey);
-        if (it != m_history.end() && keyFor(m_player->url()) == m_currentKey) {
+        if (it != m_history.end() && keyFor(m_player->url()) == m_currentPlaybackKey) {
             it->watched = true;
             it->positionMs = 0;
             it->lastPlayed = QDateTime::currentMSecsSinceEpoch();
@@ -97,6 +142,7 @@ void UserStore::onPlayerStateChanged() {
             emit historyChanged();
             m_dirty = true;
             scheduleSave();
+            writeHistory();
         }
         return;
     }
@@ -104,32 +150,33 @@ void UserStore::onPlayerStateChanged() {
     if (st == QLatin1String("Paused") || st == QLatin1String("Stopped") || st == QLatin1String("Error")) {
         m_tickTimer.stop();
         checkpoint(true);
+        writeHistory();
     }
 }
 
-void UserStore::checkpoint(bool notify) {
+void UserStore::checkpoint(bool notify, bool allowZeroPosition) {
     if (!m_player || m_currentKey.isEmpty()) return;
     // Only record progress for the file this entry actually belongs to
-    if (keyFor(m_player->url()) != m_currentKey) return;
+    if (keyFor(m_player->url()) != m_currentPlaybackKey) return;
 
     const qint64 pos = m_player->timeMs();
     const qint64 dur = m_player->durationMs();
-    // stop() zeroes the clock; ignore it so a restart never wipes saved progress
-    if (pos <= 0 || dur <= 0) return;
+    // A seek to zero is intentional. Ordinary zero-clock samples (startup/stop) are ignored.
+    if ((pos <= 0 && !allowZeroPosition) || pos < 0) return;
 
     auto it = m_history.find(m_currentKey);
     if (it == m_history.end()) return;
 
     HistoryEntry &e = it.value();
-    e.durationMs = dur;
+    if (dur > 0) e.durationMs = dur;
     e.lastPlayed = QDateTime::currentMSecsSinceEpoch();
 
-    if (pos >= static_cast<qint64>(static_cast<double>(dur) * kWatchedFraction)) {
+    if (dur > 0 && pos >= static_cast<qint64>(static_cast<double>(dur) * kWatchedFraction)) {
         e.watched = true;
         e.positionMs = 0;
     } else {
         e.positionMs = pos;
-        if (pos >= kMinResumeMs) e.watched = false;   // being watched again
+        if (pos >= kMinResumeMs || allowZeroPosition) e.watched = false; // replaying or seeking back
     }
 
     m_dirty = true;
@@ -141,7 +188,7 @@ void UserStore::checkpoint(bool notify) {
     }
 }
 
-void UserStore::noteStart(const QString &url, const QString &title) {
+void UserStore::noteStart(const QString &url, const QString &title, const QString &playbackUrl) {
     const QString key = keyFor(url);
     if (key.isEmpty()) return;
 
@@ -155,6 +202,7 @@ void UserStore::noteStart(const QString &url, const QString &title) {
     e.lastPlayed = QDateTime::currentMSecsSinceEpoch();
 
     m_currentKey = key;
+    m_currentPlaybackKey = keyFor(playbackUrl.isEmpty() ? url : playbackUrl);
     m_dirty = true;
     scheduleSave();
 
@@ -206,7 +254,7 @@ QVariantMap UserStore::progressFor(const QString &url) const {
 
     const HistoryEntry &e = it.value();
     const double fraction = (e.durationMs > 0 && e.positionMs > 0)
-                            ? static_cast<double>(e.positionMs) / static_cast<double>(e.durationMs)
+                            ? std::clamp(static_cast<double>(e.positionMs) / static_cast<double>(e.durationMs), 0.0, 1.0)
                             : 0.0;
     map["positionMs"] = e.positionMs;
     map["durationMs"] = e.durationMs;
@@ -220,47 +268,87 @@ qint64 UserStore::resumePositionFor(const QString &url) const {
     if (it == m_history.constEnd()) return 0;
 
     const HistoryEntry &e = it.value();
-    if (e.watched || e.durationMs <= 0) return 0;
+    if (e.watched) return 0;
     if (e.positionMs < kMinResumeMs) return 0;
-    if (e.positionMs >= static_cast<qint64>(static_cast<double>(e.durationMs) * kWatchedFraction)) return 0;
+    if (e.durationMs > 0 && e.positionMs >= static_cast<qint64>(static_cast<double>(e.durationMs) * kWatchedFraction)) return 0;
     return e.positionMs;
 }
 
 QVariantList UserStore::continueWatching() const {
-    std::vector<const HistoryEntry *> items;
+    std::vector<const HistoryEntry *> movies;
+    QHash<QString, const HistoryEntry *> series;
+    QHash<QString, SeriesLocation> locations;
     for (auto it = m_history.constBegin(); it != m_history.constEnd(); ++it) {
         const HistoryEntry &e = it.value();
         const bool isParty = (!m_partyKey.isEmpty() && it.key() == m_partyKey);
         if (!isParty) {
-            if (e.watched || e.durationMs <= 0) continue;
+            if (e.watched) continue;
             if (e.positionMs < kMinResumeMs) continue;
-            if (e.positionMs >= static_cast<qint64>(static_cast<double>(e.durationMs) * kWatchedFraction)) continue;
+            if (e.durationMs > 0 && e.positionMs >= static_cast<qint64>(static_cast<double>(e.durationMs) * kWatchedFraction)) continue;
         }
-        items.push_back(&e);
+        const SeriesLocation location = seriesLocation(e.url);
+        if (location.key.isEmpty()) {
+            movies.push_back(&e);
+        } else {
+            auto found = series.constFind(location.key);
+            if (found == series.constEnd() || found.value()->lastPlayed < e.lastPlayed) {
+                series.insert(location.key, &e);
+                locations.insert(location.key, location);
+            }
+        }
     }
 
-    std::sort(items.begin(), items.end(), [this](const HistoryEntry *a, const HistoryEntry *b) {
+    const auto recentFirst = [this](const HistoryEntry *a, const HistoryEntry *b) {
         if (!m_partyKey.isEmpty()) {
             const bool aParty = (keyFor(a->url) == m_partyKey);
             const bool bParty = (keyFor(b->url) == m_partyKey);
             if (aParty != bParty) return aParty;
         }
         return a->lastPlayed > b->lastPlayed;
+    };
+    std::sort(movies.begin(), movies.end(), recentFirst);
+
+    std::vector<QString> seriesOrder;
+    seriesOrder.reserve(static_cast<size_t>(series.size()));
+    for (auto it = series.constBegin(); it != series.constEnd(); ++it)
+        seriesOrder.push_back(it.key());
+    std::sort(seriesOrder.begin(), seriesOrder.end(), [&series, &recentFirst](const QString &a, const QString &b) {
+        return recentFirst(series.value(a), series.value(b));
     });
 
     QVariantList list;
-    for (const HistoryEntry *e : items) {
-        if (list.size() >= kMaxContinueEntries) break;
+    const auto appendEpisode = [&list](const HistoryEntry *e) {
         QVariantMap m;
         m["url"] = e->url;
         m["title"] = e->title;
         m["positionMs"] = e->positionMs;
         m["durationMs"] = e->durationMs;
         m["fraction"] = e->durationMs > 0
-                        ? (static_cast<double>(e->positionMs) / static_cast<double>(e->durationMs))
+                        ? std::clamp(static_cast<double>(e->positionMs) / static_cast<double>(e->durationMs), 0.0, 1.0)
                         : 0.0;
         m["lastPlayed"] = e->lastPlayed;
+        m["isFolder"] = false;
         list.append(m);
+    };
+
+    for (const HistoryEntry *e : movies) {
+        if (list.size() >= kMaxContinueEntries) break;
+        appendEpisode(e);
+    }
+    for (const QString &key : seriesOrder) {
+        if (list.size() >= kMaxContinueEntries) break;
+        const SeriesLocation location = locations.value(key);
+        QVariantMap folder;
+        folder["url"] = location.url;
+        folder["title"] = location.title;
+        folder["positionMs"] = 0;
+        folder["durationMs"] = 0;
+        folder["fraction"] = 0.0;
+        folder["lastPlayed"] = series.value(key)->lastPlayed;
+        folder["isFolder"] = true;
+        list.append(folder);
+        if (list.size() < kMaxContinueEntries)
+            appendEpisode(series.value(key));
     }
     return list;
 }
@@ -376,10 +464,12 @@ void UserStore::writeHistory() {
         }
         std::sort(order.begin(), order.end());
         const int excess = static_cast<int>(m_history.size()) - kMaxHistoryEntries;
-        for (int i = 0; i < excess; ++i) {
-            if (order[static_cast<size_t>(i)].second != m_currentKey) {
-                m_history.remove(order[static_cast<size_t>(i)].second);
-            }
+        int removed = 0;
+        for (const auto &entry : order) {
+            if (removed >= excess) break;
+            if (entry.second == m_currentKey) continue;
+            m_history.remove(entry.second);
+            ++removed;
         }
     }
 
@@ -399,11 +489,15 @@ void UserStore::writeHistory() {
     QSaveFile file(m_historyPath);
     if (!file.open(QIODevice::WriteOnly)) {
         FLUX_LOG_WARN("UserStore", "Could not write history file: " + m_historyPath);
+        scheduleSave();
         return;
     }
     file.write(QJsonDocument(arr).toJson(QJsonDocument::Compact));
     if (file.commit()) {
         m_dirty = false;
+    } else {
+        FLUX_LOG_WARN("UserStore", "Could not commit history file: " + m_historyPath);
+        scheduleSave();
     }
 }
 

@@ -115,7 +115,7 @@ public slots:
     Q_INVOKABLE void selectAudioTrack(int trackId);
     Q_INVOKABLE void selectSubtitleTrack(int spuId);
     Q_INVOKABLE void refreshTracks();
-    Q_INVOKABLE void playFrom(const QString &url, qint64 startMs);
+    Q_INVOKABLE void playFrom(const QString &url, qint64 startMs, qreal startPosition = -1.0);
     Q_INVOKABLE void setLanguagePreferences(const QStringList &audio, const QString &subtitle);
 
     // Teleparty: apply another member's action. These never emit userToggledPlay /
@@ -132,6 +132,7 @@ public slots:
 signals:
     void urlChanged();
     void stateChanged();
+    void aboutToStop();
     void bufferingChanged();
     void positionChanged();
     void timeChanged();
@@ -212,6 +213,10 @@ private:
 
     // Resume support: one-shot start offset consumed by the next play()
     qint64 m_startTimeMs = 0;
+    qreal m_startPosition = -1.0;
+    qint64 m_resumeTargetMs = 0;
+    qint64 m_resumeGuardDeadline = 0;
+    bool m_resumePositionPending = false;
 
     // Teleparty: >0 while a remote member's action is being applied (nothing is broadcast)
     int m_quiet = 0;

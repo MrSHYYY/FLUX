@@ -44,7 +44,8 @@ public:
     Q_INVOKABLE void setValue(const QString &key, const QVariant &value);
 
     // ---- Watch history ----
-    Q_INVOKABLE void noteStart(const QString &url, const QString &title);
+    Q_INVOKABLE void noteStart(const QString &url, const QString &title,
+                               const QString &playbackUrl = QString());
     Q_INVOKABLE void notePartyMedia(const QString &url, const QString &title, qint64 positionMs, qint64 durationMs);
     Q_INVOKABLE void clearPartyMedia();
     Q_INVOKABLE QVariantMap progressFor(const QString &url) const;
@@ -76,13 +77,14 @@ private:
     void loadHistory();
     void scheduleSave();
     void writeHistory();
-    void checkpoint(bool notify);
+    void checkpoint(bool notify, bool allowZeroPosition = false);
     void onPlayerStateChanged();
 
     QSettings m_settings;
     QString m_historyPath;
     QHash<QString, HistoryEntry> m_history;
     QString m_currentKey;
+    QString m_currentPlaybackKey;
     QString m_partyKey;
     int m_revision = 0;
 
