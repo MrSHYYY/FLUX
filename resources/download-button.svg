@@ -1,0 +1,65 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="440" height="74" viewBox="0 0 440 74" fill="none">
+  <defs>
+    <linearGradient id="cardGrad" x1="0" y1="0" x2="440" y2="74" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#18181b"/>
+      <stop offset="100%" stop-color="#0f0f11"/>
+    </linearGradient>
+    <linearGradient id="borderGrad" x1="0" y1="0" x2="440" y2="74" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#3f3f46"/>
+      <stop offset="50%" stop-color="#27272a"/>
+      <stop offset="100%" stop-color="#18181b"/>
+    </linearGradient>
+    <linearGradient id="iconGrad" x1="18" y1="17" x2="58" y2="57" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#e50914"/>
+      <stop offset="100%" stop-color="#b80710"/>
+    </linearGradient>
+    <filter id="shadow" x="-4" y="-2" width="448" height="82" filterUnits="userSpaceOnUse">
+      <feDropShadow dx="0" dy="4" stdDeviation="6" flood-color="#000000" flood-opacity="0.35"/>
+    </filter>
+  </defs>
+
+  <style>
+    .card-bg {
+      transition: all 0.25s ease;
+    }
+    .card:hover .card-bg {
+      fill: #222226;
+      stroke: #e50914;
+    }
+    .card:hover .arrow-icon {
+      transform: translateX(3px);
+      stroke: #ffffff;
+    }
+    .arrow-icon {
+      transition: transform 0.2s ease, stroke 0.2s ease;
+    }
+  </style>
+
+  <g class="card" cursor="pointer">
+    <!-- Card Background -->
+    <rect class="card-bg" x="2" y="2" width="436" height="70" rx="14" ry="14" fill="url(#cardGrad)" stroke="url(#borderGrad)" stroke-width="1.5" filter="url(#shadow)"/>
+
+    <!-- Icon Container -->
+    <rect x="18" y="17" width="40" height="40" rx="10" ry="10" fill="url(#iconGrad)"/>
+    <!-- Download Icon -->
+    <g transform="translate(26, 25)" stroke="#ffffff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" fill="none">
+      <path d="M12 3v11"/>
+      <path d="m7 10 5 5 5-5"/>
+      <path d="M4 19h16"/>
+    </g>
+
+    <!-- Typography -->
+    <text x="72" y="36" fill="#ffffff" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="15" font-weight="700" letter-spacing="-0.01em">
+      Download setup
+    </text>
+    <text x="72" y="52" fill="#a1a1aa" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="12" font-weight="400">
+      Recommended · Windows installer
+    </text>
+
+    <!-- Right Arrow -->
+    <g class="arrow-icon" transform="translate(402, 29)" stroke="#71717a" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" fill="none">
+      <path d="M4 8h10"/>
+      <path d="m10 4 4 4-4 4"/>
+    </g>
+  </g>
+</svg>
