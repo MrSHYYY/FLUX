@@ -164,6 +164,7 @@ private:
     void applyLanguagePreferences();
     void learnAudioChoice(int trackId);
     void learnSubtitleChoice(int spuId);
+    void updateSleepInhibition(bool force = false);
     static QString languageKey(const QString &trackName);
     static void handleVlcEvent(const libvlc_event_t *event, void *opaque);
     static QString formatMilliseconds(qint64 ms);
@@ -225,6 +226,9 @@ private:
 
     // Playback rate (1.0 = normal speed; adaptive Teleparty drift control uses 0.96..1.04)
     double m_playbackRate = 1.0;
+
+    // Display sleep prevention state
+    bool m_displaySleepInhibited = false;
 
     // Deterministic simulation state for headless unit tests
     bool m_simulatedMode = false;

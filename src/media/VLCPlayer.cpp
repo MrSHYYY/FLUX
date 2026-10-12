@@ -9,6 +9,16 @@
 #include <cmath>
 #include <cstdlib>
 
+#ifdef Q_OS_WIN
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#define WIN32_LEAN_AND_MEAN
+#include <windows.h>
+#undef min
+#undef max
+#endif
+
 namespace Flux {
 
 // ============================================================================
@@ -330,6 +340,17 @@ VLCPlayer::VLCPlayer(QObject *parent)
             emit durationChanged();
             updateTracks();
         }
+
+        // Periodically refresh display sleep prevention while actively playing
+        static int sleepHeartbeatTicks = 0;
+        if (++sleepHeartbeatTicks % 120 == 0) { // every 30s (120 * 250ms)
+            updateSleepInhibition(true);
+        }
+    });
+
+    // Automatically prevent display sleep during video playback, restore on pause/stop
+    connect(this, &VLCPlayer::stateChanged, this, [this]() {
+        updateSleepInhibition(false);
     });
 
     // Seek coalescing timer: at most one libVLC seek every 120ms, always with the latest target
@@ -351,6 +372,13 @@ VLCPlayer::VLCPlayer(QObject *parent)
 VLCPlayer::~VLCPlayer() {
     stop();
     detachVlcEvents();
+
+    if (m_displaySleepInhibited) {
+#ifdef Q_OS_WIN
+        SetThreadExecutionState(ES_CONTINUOUS);
+#endif
+        m_displaySleepInhibited = false;
+    }
 
     if (m_currentMedia) {
         libvlc_media_release(m_currentMedia);
@@ -1384,6 +1412,30 @@ QString VLCPlayer::formatMilliseconds(qint64 ms) {
     return QString("%1:%2")
         .arg(minutes, 2, 10, QChar('0'))
         .arg(seconds, 2, 10, QChar('0'));
+}
+
+void VLCPlayer::updateSleepInhibition(bool force) {
+#ifdef Q_OS_WIN
+    if (m_simulatedMode) return;
+
+    const bool shouldInhibit = isPlaying() || m_state == QLatin1String("Playing")
+                               || (m_isBuffering && m_state.startsWith(QLatin1String("Buffering")));
+
+    if (!force && shouldInhibit == m_displaySleepInhibited) return;
+    m_displaySleepInhibited = shouldInhibit;
+
+    if (shouldInhibit) {
+        SetThreadExecutionState(ES_CONTINUOUS | ES_DISPLAY_REQUIRED | ES_SYSTEM_REQUIRED);
+        if (!force) {
+            FLUX_LOG_INFO("VLCPlayer", "Display sleep prevention active (video playing)");
+        }
+    } else {
+        SetThreadExecutionState(ES_CONTINUOUS);
+        FLUX_LOG_INFO("VLCPlayer", "Display sleep prevention released");
+    }
+#else
+    Q_UNUSED(force);
+#endif
 }
 
 } // namespace Flux
