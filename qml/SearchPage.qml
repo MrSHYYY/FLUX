@@ -812,7 +812,7 @@ Item {
             rootLabel: root.bookmarksOpen ? "Bookmarks" : (root.hasSearched ? "Results" : "Home")
 
             onBackClicked: {
-                if (fluxBrowser) fluxBrowser.goUp()
+                if (fluxBrowser) fluxBrowser.goBack()
             }
 
             onRootClicked: {

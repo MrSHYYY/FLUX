@@ -362,6 +362,9 @@ void FolderBrowser::open(const QString &folderUrl, const QString &libraryName, c
     }
     if (!href.endsWith('/')) href += QLatin1Char('/');
 
+    if (m_active && !m_restoringPreviousLocation && (origin + href) != currentUrl())
+        m_navigationHistory.append(currentUrl());
+
     m_origin = origin;
     m_href = href;
     if (!libraryName.isEmpty()) m_libraryName = libraryName;
@@ -376,6 +379,7 @@ void FolderBrowser::open(const QString &folderUrl, const QString &libraryName, c
 
 void FolderBrowser::close() {
     ++m_loadToken;   // discard any in-flight listing
+    m_navigationHistory.clear();
     setLoading(false);
     setError(QString());
 
@@ -401,10 +405,25 @@ void FolderBrowser::goUp() {
     open(m_origin + parent);
 }
 
+void FolderBrowser::goBack() {
+    if (m_navigationHistory.isEmpty()) {
+        close();
+        return;
+    }
+
+    const QString previousUrl = m_navigationHistory.takeLast();
+    m_restoringPreviousLocation = true;
+    open(previousUrl);
+    m_restoringPreviousLocation = false;
+}
+
 void FolderBrowser::goTo(int crumbIndex) {
     const QVariantList crumbs = breadcrumbs();
     if (crumbIndex < 0 || crumbIndex >= crumbs.size() - 1) return;   // last crumb = here
+    m_navigationHistory.clear();
+    m_restoringPreviousLocation = true;
     open(crumbs.at(crumbIndex).toMap().value("url").toString());
+    m_restoringPreviousLocation = false;
 }
 
 void FolderBrowser::reload() {

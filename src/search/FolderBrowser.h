@@ -4,6 +4,7 @@
 #include <QHash>
 #include <QNetworkAccessManager>
 #include <QString>
+#include <QStringList>
 #include <QVariantList>
 #include <functional>
 #include <vector>
@@ -64,6 +65,7 @@ public:
     Q_INVOKABLE void open(const QString &folderUrl, const QString &libraryName = QString(), const QString &group = QString());
     Q_INVOKABLE void close();
     Q_INVOKABLE void goUp();
+    Q_INVOKABLE void goBack();
     Q_INVOKABLE void goTo(int crumbIndex);
     Q_INVOKABLE void reload();
     Q_INVOKABLE void findNext(const QString &currentFileUrl);
@@ -115,6 +117,8 @@ private:
     QString m_href;          // encoded path, always ends with '/'
     QString m_libraryName;
     QString m_group;
+    QStringList m_navigationHistory;
+    bool m_restoringPreviousLocation = false;
 
     quint64 m_loadToken = 0;
     quint64 m_nextToken = 0;

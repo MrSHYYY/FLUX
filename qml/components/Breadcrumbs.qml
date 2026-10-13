@@ -32,7 +32,7 @@ Rectangle {
             iconSize: 18
             implicitWidth: 36
             implicitHeight: 36
-            tip: "Up one level"
+            tip: "Back"
             tipAbove: false
             Layout.alignment: Qt.AlignVCenter
 
