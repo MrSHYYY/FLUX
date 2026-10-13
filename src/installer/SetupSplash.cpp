@@ -183,26 +183,17 @@ void RenderSplashFrame() {
         Pen borderPen(Color(255, 56, 60, 66), 1.0f * s); // #383C42
         g.DrawPath(&borderPen, &cardPath);
 
-        // 2. Rotating FLUX v2.png Logo (exact Discord Clyde position and size: 72x72 at top margin ~82)
+        // 2. Centered Still FLUX v2.png Logo (exact Discord Clyde position and size: 72x72 at top margin ~82)
         const REAL iconSize = 72.0f * s;
-        const REAL cx = static_cast<REAL>(w) / 2.0f;
-        const REAL cy = (82.0f + 36.0f) * s;
+        const REAL iconX = (static_cast<REAL>(w) - iconSize) / 2.0f;
+        const REAL iconY = 82.0f * s;
 
-        if (g_state.logoImage || g_state.hAppIcon) {
-            GraphicsState gState = g.Save();
-            g.TranslateTransform(cx, cy);
-            g.RotateTransform(g_state.logoAngle);
-            g.TranslateTransform(-iconSize / 2.0f, -iconSize / 2.0f);
-
-            if (g_state.logoImage) {
-                g.DrawImage(g_state.logoImage, 0.0f, 0.0f, iconSize, iconSize);
-            } else if (g_state.hAppIcon) {
-                HDC gHdc = g.GetHDC();
-                DrawIconEx(gHdc, 0, 0, g_state.hAppIcon, static_cast<int>(iconSize), static_cast<int>(iconSize), 0, nullptr, DI_NORMAL);
-                g.ReleaseHDC(gHdc);
-            }
-
-            g.Restore(gState);
+        if (g_state.logoImage) {
+            g.DrawImage(g_state.logoImage, iconX, iconY, iconSize, iconSize);
+        } else if (g_state.hAppIcon) {
+            HDC gHdc = g.GetHDC();
+            DrawIconEx(gHdc, static_cast<int>(iconX), static_cast<int>(iconY), g_state.hAppIcon, static_cast<int>(iconSize), static_cast<int>(iconSize), 0, nullptr, DI_NORMAL);
+            g.ReleaseHDC(gHdc);
         }
 
         // 3. Status Text ("INSTALLING UPDATE 1 OF 1", bold italic, #FAFBFC)
@@ -284,9 +275,6 @@ LRESULT CALLBACK SplashWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam
 
             const float diff = g_state.targetProgress - g_state.displayProgress;
             g_state.displayProgress += diff * (g_state.finishing ? 0.22f : 0.08f);
-
-            // Spin icon smoothly (full revolution every 2.4s at 60 FPS)
-            g_state.logoAngle = std::fmod(g_state.logoAngle + 2.5f, 360.0f);
 
             RenderSplashFrame();
 

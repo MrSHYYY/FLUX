@@ -201,17 +201,6 @@ Window {
                 fillMode: Image.PreserveAspectFit
                 smooth: true
                 mipmap: true
-
-                // Keep still when checking for update; rotate when installing update
-                transformOrigin: Item.Center
-                rotation: 0
-                RotationAnimation on rotation {
-                    loops: Animation.Infinite
-                    from: 0
-                    to: 360
-                    duration: 2400
-                    running: popup.visible && (popup.phase === "downloading" || popup.phase === "installing")
-                }
             }
         }
 
