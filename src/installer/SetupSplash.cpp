@@ -30,7 +30,7 @@ using namespace Gdiplus;
 namespace {
 
 constexpr int kBaseWidth  = 300;
-constexpr int kBaseHeight = 350;
+constexpr int kBaseHeight = 310;
 constexpr UINT_PTR kTimerId = 1;
 constexpr UINT kFrameIntervalMs = 16; // ~60 FPS
 
@@ -38,19 +38,20 @@ struct AppState {
     HWND hwnd = nullptr;
     HANDLE hParentProcess = nullptr;
     std::wstring progressFilePath;
-    std::wstring versionText = L"v1.5.1";
-    std::wstring statusStep  = L"Extracting application files\u2026";
+    std::wstring versionText = L"v1.6.1";
+    std::wstring statusStep  = L"INSTALLING UPDATE 1 OF 1";
 
     float scale = 1.0f;
     int width  = kBaseWidth;
     int height = kBaseHeight;
 
-    float spinnerAngle = -90.0f;
-    float pulsePhase   = 0.0f;
-    float targetProgress  = 0.08f;
-    float displayProgress = 0.02f;
+    float logoAngle = 0.0f;
+    float targetProgress  = 0.12f;
+    float displayProgress = 0.04f;
     bool finishing = false;
     int finishTicks = 0;
+    HICON hAppIcon = nullptr;
+    Gdiplus::Image *logoImage = nullptr;
 };
 
 AppState g_state;
@@ -169,127 +170,77 @@ void RenderSplashFrame() {
         g.SetSmoothingMode(SmoothingModeAntiAlias);
         g.SetPixelOffsetMode(PixelOffsetModeHighQuality);
         g.SetTextRenderingHint(TextRenderingHintAntiAliasGridFit);
+        g.SetInterpolationMode(InterpolationModeHighQualityBicubic);
         g.Clear(Color(0, 0, 0, 0));
 
-        // 1. Rounded Card Surface (#0A0A0D) with 1px Border (#363641)
+        // 1. Exact Discord Card Surface (#282B30) with 8px radius and 1px border (#383C42)
         GraphicsPath cardPath;
-        AddRoundedRect(cardPath, 0.5f * s, 0.5f * s, w - 1.0f * s, h - 1.0f * s, 16.0f * s);
+        AddRoundedRect(cardPath, 0.5f * s, 0.5f * s, w - 1.0f * s, h - 1.0f * s, 8.0f * s);
 
-        SolidBrush bgBrush(Color(255, 10, 10, 13));
+        SolidBrush bgBrush(Color(255, 40, 43, 48)); // #282B30
         g.FillPath(&bgBrush, &cardPath);
 
-        // Clip inside card for ambient top glow
-        g.SetClip(&cardPath);
-        {
-            GraphicsPath glowPath;
-            const REAL glowR = 130.0f * s;
-            const REAL glowCx = 150.0f * s;
-            const REAL glowCy = -10.0f * s;
-            glowPath.AddEllipse(glowCx - glowR, glowCy - glowR, glowR * 2.0f, glowR * 2.0f);
-
-            PathGradientBrush glowBrush(&glowPath);
-            glowBrush.SetCenterColor(Color(38, 229, 9, 20));
-            Color surroundColors[1] = { Color(0, 229, 9, 20) };
-            INT count = 1;
-            glowBrush.SetSurroundColors(surroundColors, &count);
-            g.FillPath(&glowBrush, &glowPath);
-        }
-        g.ResetClip();
-
-        Pen borderPen(Color(255, 54, 54, 65), 1.0f * s);
+        Pen borderPen(Color(255, 56, 60, 66), 1.0f * s); // #383C42
         g.DrawPath(&borderPen, &cardPath);
 
-        // 2. Animated Brand Emblem + Spinner Ring (center at 150, 86)
-        const REAL cx = 150.0f * s;
-        const REAL cy = 86.0f * s;
+        // 2. Rotating FLUX v2.png Logo (exact Discord Clyde position and size: 72x72 at top margin ~82)
+        const REAL iconSize = 72.0f * s;
+        const REAL cx = static_cast<REAL>(w) / 2.0f;
+        const REAL cy = (82.0f + 36.0f) * s;
 
-        // Outer pulsing ring
-        const float pulseScale = 1.0f + 0.05f * std::sin(g_state.pulsePhase);
-        const REAL pulseR = 44.0f * s * pulseScale;
-        Pen pulsePen(Color(40, 229, 9, 20), 1.0f * s);
-        g.DrawEllipse(&pulsePen, cx - pulseR, cy - pulseR, pulseR * 2.0f, pulseR * 2.0f);
+        if (g_state.logoImage || g_state.hAppIcon) {
+            GraphicsState gState = g.Save();
+            g.TranslateTransform(cx, cy);
+            g.RotateTransform(g_state.logoAngle);
+            g.TranslateTransform(-iconSize / 2.0f, -iconSize / 2.0f);
 
-        // Spinner track ring
-        const REAL spinR = 39.0f * s;
-        Pen trackRingPen(Color(26, 255, 255, 255), 3.0f * s);
-        g.DrawEllipse(&trackRingPen, cx - spinR, cy - spinR, spinR * 2.0f, spinR * 2.0f);
+            if (g_state.logoImage) {
+                g.DrawImage(g_state.logoImage, 0.0f, 0.0f, iconSize, iconSize);
+            } else if (g_state.hAppIcon) {
+                HDC gHdc = g.GetHDC();
+                DrawIconEx(gHdc, 0, 0, g_state.hAppIcon, static_cast<int>(iconSize), static_cast<int>(iconSize), 0, nullptr, DI_NORMAL);
+                g.ReleaseHDC(gHdc);
+            }
 
-        // Rotating crimson arc
-        Pen arcPen(Color(255, 229, 9, 20), 3.0f * s);
-        arcPen.SetStartCap(LineCapRound);
-        arcPen.SetEndCap(LineCapRound);
-        g.DrawArc(&arcPen, cx - spinR, cy - spinR, spinR * 2.0f, spinR * 2.0f, g_state.spinnerAngle, 195.0f);
+            g.Restore(gState);
+        }
 
-        // Inner dark circle (#15151A) + border (#363641)
-        const REAL badgeR = 31.0f * s;
-        SolidBrush badgeBrush(Color(255, 21, 21, 26));
-        g.FillEllipse(&badgeBrush, cx - badgeR, cy - badgeR, badgeR * 2.0f, badgeR * 2.0f);
-        Pen badgeBorderPen(Color(255, 54, 54, 65), 1.0f * s);
-        g.DrawEllipse(&badgeBorderPen, cx - badgeR, cy - badgeR, badgeR * 2.0f, badgeR * 2.0f);
-
-        // Center "F" monogram
+        // 3. Status Text ("INSTALLING UPDATE 1 OF 1", bold italic, #FAFBFC)
         FontFamily segoeFamily(L"Segoe UI");
         StringFormat centerFormat;
         centerFormat.SetAlignment(StringAlignmentCenter);
         centerFormat.SetLineAlignment(StringAlignmentCenter);
 
-        Font monogramFont(&segoeFamily, 30.0f * s, FontStyleBold, UnitPixel);
-        SolidBrush accentBrush(Color(255, 229, 9, 20));
-        RectF badgeRect(cx - badgeR, cy - badgeR + 1.0f * s, badgeR * 2.0f, badgeR * 2.0f);
-        g.DrawString(L"F", -1, &monogramFont, badgeRect, &centerFormat, &accentBrush);
+        Font statusFont(&segoeFamily, 13.0f * s, FontStyleBoldItalic, UnitPixel);
+        SolidBrush textBrush(Color(255, 250, 251, 252)); // #FAFBFC
 
-        // 3. Wordmark "F L U X"
-        Font wordmarkFont(&segoeFamily, 21.0f * s, FontStyleBold, UnitPixel);
-        SolidBrush textBrush(Color(255, 245, 245, 247));
-        RectF wordmarkRect(0.0f, 144.0f * s, static_cast<REAL>(w), 30.0f * s);
-        g.DrawString(L"F L U X", -1, &wordmarkFont, wordmarkRect, &centerFormat, &textBrush);
+        const wchar_t *statusText = (g_state.displayProgress >= 0.98f)
+                                    ? L"STARTING\u2026"
+                                    : g_state.statusStep.c_str();
 
-        // 4. Primary Discord-style status headline
-        Font headlineFont(&segoeFamily, 11.0f * s, FontStyleBold, UnitPixel);
-        RectF headlineRect(20.0f * s, 194.0f * s, (kBaseWidth - 40.0f) * s, 20.0f * s);
-        const wchar_t *headline = (g_state.displayProgress >= 0.98f)
-                                  ? L"STARTING\u2026"
-                                  : L"INSTALLING FLUX\u2026";
-        g.DrawString(headline, -1, &headlineFont, headlineRect, &centerFormat, &textBrush);
+        RectF textRect(10.0f * s, 192.0f * s, (kBaseWidth - 20.0f) * s, 24.0f * s);
+        g.DrawString(statusText, -1, &statusFont, textRect, &centerFormat, &textBrush);
 
-        // 5. Secondary percentage line
-        const int pct = std::min(100, std::max(1, static_cast<int>(std::round(g_state.displayProgress * 100.0f))));
-        wchar_t detailBuf[128]{};
-        std::swprintf(detailBuf, 128, L"Setting up FLUX %ls (%d%%)", g_state.versionText.c_str(), pct);
-
-        Font detailFont(&segoeFamily, 12.0f * s, FontStyleRegular, UnitPixel);
-        SolidBrush dimBrush(Color(255, 169, 169, 182));
-        RectF detailRect(20.0f * s, 218.0f * s, (kBaseWidth - 40.0f) * s, 20.0f * s);
-        g.DrawString(detailBuf, -1, &detailFont, detailRect, &centerFormat, &dimBrush);
-
-        // 6. Step subtext
-        Font stepFont(&segoeFamily, 10.5f * s, FontStyleRegular, UnitPixel);
-        SolidBrush muteBrush(Color(255, 108, 108, 122));
-        RectF stepRect(20.0f * s, 240.0f * s, (kBaseWidth - 40.0f) * s, 18.0f * s);
-        g.DrawString(g_state.statusStep.c_str(), -1, &stepFont, stepRect, &centerFormat, &muteBrush);
-
-        // 7. Smooth Progress Bar
-        const REAL barX = 28.0f * s;
-        const REAL barY = 288.0f * s;
-        const REAL barW = (kBaseWidth - 56.0f) * s;
-        const REAL barH = 5.0f * s;
-        const REAL barR = 2.5f * s;
+        // 4. Exact Discord Progress Bar
+        // Track: 180px width, 8px height, 4px radius, #34383E
+        // Fill: #4E545E (matching Discord's actual update fill)
+        const REAL barW = 180.0f * s;
+        const REAL barH = 8.0f * s;
+        const REAL barR = 4.0f * s;
+        const REAL barX = (static_cast<REAL>(w) - barW) / 2.0f;
+        const REAL barY = 232.0f * s;
 
         GraphicsPath trackPath;
         AddRoundedRect(trackPath, barX, barY, barW, barH, barR);
-        SolidBrush trackBrush(Color(255, 37, 37, 46));
+        SolidBrush trackBrush(Color(255, 52, 56, 62)); // #34383E
         g.FillPath(&trackBrush, &trackPath);
 
-        const REAL fillW = std::fmax(6.0f * s, barW * std::fmin(1.0f, std::fmax(0.0f, g_state.displayProgress)));
+        const REAL fillFraction = std::fmin(1.0f, std::fmax(0.04f, g_state.displayProgress));
+        const REAL fillW = std::fmax(barH, barW * fillFraction);
         GraphicsPath fillPath;
         AddRoundedRect(fillPath, barX, barY, fillW, barH, barR);
-        g.FillPath(&accentBrush, &fillPath);
-
-        // 8. Version Footer
-        FontFamily monoFamily(L"Consolas");
-        Font footerFont(monoFamily.IsAvailable() ? &monoFamily : &segoeFamily, 10.0f * s, FontStyleRegular, UnitPixel);
-        RectF footerRect(20.0f * s, 310.0f * s, (kBaseWidth - 40.0f) * s, 18.0f * s);
-        g.DrawString(g_state.versionText.c_str(), -1, &footerFont, footerRect, &centerFormat, &muteBrush);
+        SolidBrush fillBrush(Color(255, 78, 84, 94)); // #4E545E
+        g.FillPath(&fillBrush, &fillPath);
     }
 
     POINT ptSrc{ 0, 0 };
@@ -315,7 +266,6 @@ LRESULT CALLBACK SplashWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam
 
     case WM_TIMER:
         if (wParam == kTimerId) {
-            // Check if parent NSIS installer process has exited
             if (g_state.hParentProcess) {
                 if (WaitForSingleObject(g_state.hParentProcess, 0) == WAIT_OBJECT_0) {
                     g_state.finishing = true;
@@ -323,24 +273,20 @@ LRESULT CALLBACK SplashWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam
                 }
             }
 
-            // Poll progress file every ~100ms
             static int tickCounter = 0;
             if (++tickCounter % 6 == 0) {
                 PollProgressFile();
             }
 
-            // While extracting large files, creep targetProgress smoothly up to 0.92
-            if (!g_state.finishing && g_state.targetProgress < 0.92f) {
+            if (!g_state.finishing && g_state.targetProgress < 0.94f) {
                 g_state.targetProgress += 0.0018f;
             }
 
-            // Smooth exponential easing toward targetProgress
             const float diff = g_state.targetProgress - g_state.displayProgress;
             g_state.displayProgress += diff * (g_state.finishing ? 0.22f : 0.08f);
 
-            // Advance animations (60 FPS)
-            g_state.spinnerAngle = std::fmod(g_state.spinnerAngle + 6.0f, 360.0f);
-            g_state.pulsePhase += 0.048f;
+            // Spin icon smoothly (full revolution every 2.4s at 60 FPS)
+            g_state.logoAngle = std::fmod(g_state.logoAngle + 2.5f, 360.0f);
 
             RenderSplashFrame();
 
@@ -390,6 +336,42 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE, LPWSTR, int) {
     ULONG_PTR gdiplusToken = 0;
     GdiplusStartup(&gdiplusToken, &gdiplusStartupInput, nullptr);
 
+    // Load FLUX v2.png logo (try embedded resource first, then disk fallback)
+    HRSRC hRes = FindResourceW(hInstance, L"IDR_V2_PNG", RT_RCDATA);
+    if (hRes) {
+        DWORD resSize = SizeofResource(hInstance, hRes);
+        HGLOBAL hResData = LoadResource(hInstance, hRes);
+        if (hResData && resSize > 0) {
+            const void *pData = LockResource(hResData);
+            HGLOBAL hMem = GlobalAlloc(GMEM_MOVEABLE, resSize);
+            if (hMem) {
+                void *pMem = GlobalLock(hMem);
+                if (pMem) {
+                    std::memcpy(pMem, pData, resSize);
+                    GlobalUnlock(hMem);
+                    IStream *pStream = nullptr;
+                    if (SUCCEEDED(CreateStreamOnHGlobal(hMem, TRUE, &pStream)) && pStream) {
+                        g_state.logoImage = Image::FromStream(pStream);
+                        pStream->Release();
+                    }
+                }
+            }
+        }
+    }
+    if (!g_state.logoImage) {
+        g_state.logoImage = Image::FromFile(L"resources\\v2.png");
+        if (g_state.logoImage && g_state.logoImage->GetLastStatus() != Ok) {
+            delete g_state.logoImage;
+            g_state.logoImage = nullptr;
+        }
+    }
+
+    // Load FLUX window icon from embedded resource IDI_ICON1
+    g_state.hAppIcon = (HICON)LoadImageW(hInstance, L"IDI_ICON1", IMAGE_ICON, 128, 128, LR_DEFAULTCOLOR);
+    if (!g_state.hAppIcon) {
+        g_state.hAppIcon = (HICON)LoadIconW(hInstance, L"IDI_ICON1");
+    }
+
     // Compute DPI scale for primary monitor
     HDC screenDc = GetDC(nullptr);
     const int dpiX = GetDeviceCaps(screenDc, LOGPIXELSX);
@@ -407,8 +389,8 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE, LPWSTR, int) {
     wc.cbSize = sizeof(wc);
     wc.lpfnWndProc = SplashWndProc;
     wc.hInstance = hInstance;
-    wc.hIcon = LoadIconW(hInstance, L"IDI_ICON1");
-    wc.hIconSm = wc.hIcon;
+    wc.hIcon = g_state.hAppIcon;
+    wc.hIconSm = g_state.hAppIcon;
     wc.hCursor = LoadCursor(nullptr, IDC_ARROW);
     wc.lpszClassName = L"FluxDiscordSetupSplashClass";
     RegisterClassExW(&wc);
@@ -432,6 +414,16 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE, LPWSTR, int) {
             TranslateMessage(&msg);
             DispatchMessageW(&msg);
         }
+    }
+
+    if (g_state.logoImage) {
+        delete g_state.logoImage;
+        g_state.logoImage = nullptr;
+    }
+
+    if (g_state.hAppIcon) {
+        DestroyIcon(g_state.hAppIcon);
+        g_state.hAppIcon = nullptr;
     }
 
     GdiplusShutdown(gdiplusToken);

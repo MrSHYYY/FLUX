@@ -2,13 +2,13 @@ import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
 import QtQuick.Window
-import "Theme.js" as Theme
 
 // Discord-style startup updater popup window.
-// Opens first when FLUX launches:
-//  - Checks GitHub Releases for a newer version ("CHECKING FOR UPDATES...")
-//  - If an update is available, automatically downloads and installs it ("DOWNLOADING UPDATE...")
-//  - If up to date (or offline), transitions directly into the main FLUX window ("STARTING...")
+// Replicates the exact Discord updater layout, colors (#282B30),
+// typography and geometry:
+//  - Logo: flux.png / flux.ico styled in Discord's exact position & proportions
+//  - Checking update screen: "Checking for updates..." (with animated ellipsis)
+//  - Actual update screen: "INSTALLING UPDATE 1 OF 1" (italic uppercase) + smooth progress bar (#3E4248)
 Window {
     id: popup
 
@@ -19,11 +19,11 @@ Window {
     property bool doneEmitted: false
 
     width: 300
-    height: 350
+    height: 310
     minimumWidth: 300
     maximumWidth: 300
-    minimumHeight: 350
-    maximumHeight: 350
+    minimumHeight: 310
+    maximumHeight: 310
     visible: true
     title: "FLUX"
     color: "transparent"
@@ -60,7 +60,6 @@ Window {
         } else if (st === "upToDate") {
             popup.proceedToApp()
         } else if (st === "idle" && popup.checkStarted && popup.phase === "checking") {
-            // Silent check finished without an update (e.g. offline / local BDIX network only)
             popup.proceedToApp()
         } else if (st === "error") {
             safetyTimer.stop()
@@ -81,7 +80,6 @@ Window {
         safetyTimer.start()
     }
 
-    // Brief initial beat so the popup renders smoothly before network activity begins
     Timer {
         id: startCheckTimer
         interval: 300
@@ -97,7 +95,6 @@ Window {
         }
     }
 
-    // Never block startup if the user has no internet access
     Timer {
         id: safetyTimer
         interval: 6500
@@ -109,10 +106,9 @@ Window {
         }
     }
 
-    // Smooth "STARTING..." transition before opening the main application window
     Timer {
         id: launchTimer
-        interval: 320
+        interval: 300
         repeat: false
         onTriggered: {
             if (!popup.doneEmitted) {
@@ -120,6 +116,15 @@ Window {
                 popup.finished()
             }
         }
+    }
+
+    // Checking ellipsis animation: "Checking for updates" -> "." -> ".." -> "..."
+    property int dotCount: 3
+    Timer {
+        interval: 500
+        running: popup.visible && popup.phase === "checking"
+        repeat: true
+        onTriggered: popup.dotCount = (popup.dotCount % 3) + 1
     }
 
     Connections {
@@ -130,26 +135,15 @@ Window {
         }
     }
 
-    // ---- Card Surface ---------------------------------------------------------
+    // ---- Exact Discord Window Card Surface (#282B30) ----
     Rectangle {
         id: card
         anchors.fill: parent
-        radius: 16
-        color: Theme.bg
+        radius: 8
+        color: "#282B30"
         border.width: 1
-        border.color: Theme.borderHi
+        border.color: "#383C42"
         clip: true
-
-        // Subtle top crimson ambient glow
-        Rectangle {
-            width: 240
-            height: 240
-            radius: 120
-            anchors.horizontalCenter: parent.horizontalCenter
-            anchors.top: parent.top
-            anchors.topMargin: -130
-            color: "#1AE50914"
-        }
 
         // Drag anywhere on the popup card
         MouseArea {
@@ -162,23 +156,23 @@ Window {
             }
         }
 
-        // Subtle close button in top-right corner
+        // Top-right subtle close button
         Rectangle {
-            width: 26
-            height: 26
-            radius: 13
+            width: 24
+            height: 24
+            radius: 12
             anchors.top: parent.top
             anchors.right: parent.right
-            anchors.topMargin: 10
-            anchors.rightMargin: 10
-            color: closeMouse.containsMouse ? Theme.surfaceHi : "transparent"
+            anchors.topMargin: 8
+            anchors.rightMargin: 8
+            color: closeMouse.containsMouse ? "#3A3E45" : "transparent"
             z: 5
 
             Text {
                 anchors.centerIn: parent
                 text: "\u00D7"
-                color: closeMouse.containsMouse ? Theme.text : Theme.textMute
-                font.pixelSize: 16
+                color: closeMouse.containsMouse ? "#FFFFFF" : "#72767D"
+                font.pixelSize: 15
                 font.weight: Font.Medium
             }
 
@@ -191,238 +185,174 @@ Window {
             }
         }
 
-        // ---- Main Vertical Content --------------------------------------------
-        ColumnLayout {
-            anchors.fill: parent
-            anchors.leftMargin: 28
-            anchors.rightMargin: 28
-            anchors.topMargin: 40
-            anchors.bottomMargin: 22
-            spacing: 0
+        // ---- Center Logo (FLUX v2.png logo centered like Discord Clyde) ----
+        Item {
+            id: logoContainer
+            width: 72
+            height: 72
+            anchors.horizontalCenter: parent.horizontalCenter
+            anchors.top: parent.top
+            anchors.topMargin: 82
 
-            // Animated Brand Emblem + Spinner Ring
-            Item {
-                Layout.alignment: Qt.AlignHCenter
-                width: 92
-                height: 92
+            Image {
+                id: logoImg
+                anchors.fill: parent
+                source: "qrc:/FLUX/resources/v2.png"
+                fillMode: Image.PreserveAspectFit
+                smooth: true
+                mipmap: true
 
-                // Outer pulse ring
-                Rectangle {
-                    anchors.centerIn: parent
-                    width: 88
-                    height: 88
-                    radius: 44
-                    color: "transparent"
-                    border.width: 1
-                    border.color: "#22E50914"
-
-                    SequentialAnimation on scale {
-                        loops: Animation.Infinite
-                        running: popup.visible && popup.phase !== "error"
-                        NumberAnimation { from: 0.96; to: 1.06; duration: 1100; easing.type: Easing.InOutSine }
-                        NumberAnimation { from: 1.06; to: 0.96; duration: 1100; easing.type: Easing.InOutSine }
-                    }
-                }
-
-                // Rotating crimson spinner arc
-                FluxSpinner {
-                    anchors.centerIn: parent
-                    size: 84
-                    thickness: 3
-                    color: popup.phase === "error" ? Theme.danger : Theme.accent
-                    trackColor: "#18FFFFFF"
-                    running: popup.visible && popup.phase !== "error"
-                }
-
-                // Inner dark badge with FLUX monogram
-                Rectangle {
-                    anchors.centerIn: parent
-                    width: 62
-                    height: 62
-                    radius: 31
-                    color: Theme.surface
-                    border.width: 1
-                    border.color: Theme.borderHi
-
-                    Text {
-                        anchors.centerIn: parent
-                        text: "F"
-                        color: Theme.accent
-                        font.family: Theme.fontFamily
-                        font.pixelSize: 32
-                        font.weight: Font.Black
-                    }
+                // Keep still when checking for update; rotate when installing update
+                transformOrigin: Item.Center
+                rotation: 0
+                RotationAnimation on rotation {
+                    loops: Animation.Infinite
+                    from: 0
+                    to: 360
+                    duration: 2400
+                    running: popup.visible && (popup.phase === "downloading" || popup.phase === "installing")
                 }
             }
+        }
 
-            Item { Layout.preferredHeight: 16 }
+        // ---- Text Area ----
+        Item {
+            id: textArea
+            anchors.horizontalCenter: parent.horizontalCenter
+            anchors.top: logoContainer.bottom
+            anchors.topMargin: 38
+            width: parent.width - 40
+            height: 24
 
-            // Wordmark
+            // "Checking for updates..." (Plain sentence case, regular weight, 14px)
             Text {
-                Layout.alignment: Qt.AlignHCenter
-                text: "FLUX"
-                color: Theme.text
-                font.family: Theme.fontFamily
-                font.pixelSize: 22
-                font.weight: Font.Black
-                font.letterSpacing: 5
+                anchors.centerIn: parent
+                visible: popup.phase === "checking"
+                text: "Checking for updates" + ".".repeat(popup.dotCount)
+                color: "#FFFFFF"
+                font.family: "Segoe UI"
+                font.pixelSize: 14
+                font.weight: Font.DemiBold
             }
 
-            Item { Layout.preferredHeight: 22 }
-
-            // Primary Discord-style status headline
+            // "INSTALLING UPDATE 1 OF 1" (All-caps, italicized, bold, 13px)
             Text {
-                Layout.fillWidth: true
-                horizontalAlignment: Text.AlignHCenter
-                text: {
-                    if (popup.phase === "downloading") return "DOWNLOADING UPDATE\u2026"
-                    if (popup.phase === "installing")  return "INSTALLING UPDATE\u2026"
-                    if (popup.phase === "starting")    return "STARTING\u2026"
-                    if (popup.phase === "error")       return "UPDATE INTERRUPTED"
-                    return "CHECKING FOR UPDATES\u2026"
-                }
-                color: popup.phase === "error" ? Theme.danger : Theme.text
-                font.family: Theme.fontFamily
-                font.pixelSize: 11
-                font.weight: Font.Bold
-                font.letterSpacing: 1.4
+                anchors.centerIn: parent
+                visible: popup.phase === "downloading" || popup.phase === "installing"
+                text: "INSTALLING UPDATE 1 OF 1"
+                color: "#FAFBFC"
+                font.family: "Segoe UI"
+                font.pixelSize: 13
+                font.italic: true
+                font.bold: true
+                font.letterSpacing: 0.5
             }
 
-            Item { Layout.preferredHeight: 6 }
-
-            // Secondary detail line
+            // "STARTING..."
             Text {
-                Layout.fillWidth: true
-                horizontalAlignment: Text.AlignHCenter
-                wrapMode: Text.Wrap
-                maximumLineCount: 2
-                elide: Text.ElideRight
-                text: {
-                    if (popup.phase === "downloading") {
-                        var pct = Math.round((fluxUpdater ? fluxUpdater.progress : 0) * 100)
-                        var ver = fluxUpdater && fluxUpdater.latestVersion.length > 0
-                                  ? ("v" + fluxUpdater.latestVersion) : "new version"
-                        return "Updating to " + ver + " (" + pct + "%)"
-                    }
-                    if (popup.phase === "installing") {
-                        return "Applying update and restarting FLUX"
-                    }
-                    if (popup.phase === "starting") {
-                        return "Ready to stream"
-                    }
-                    if (popup.phase === "error") {
-                        return fluxUpdater && fluxUpdater.errorText.length > 0
-                               ? fluxUpdater.errorText
-                               : "Could not download the update."
-                    }
-                    return "Verifying latest release"
-                }
-                color: Theme.textDim
-                font.family: Theme.fontFamily
-                font.pixelSize: 12
+                anchors.centerIn: parent
+                visible: popup.phase === "starting"
+                text: "STARTING\u2026"
+                color: "#FAFBFC"
+                font.family: "Segoe UI"
+                font.pixelSize: 13
+                font.italic: true
+                font.bold: true
+                font.letterSpacing: 0.5
             }
 
-            // Byte progress text during download
+            // Error state
             Text {
-                Layout.fillWidth: true
-                Layout.topMargin: 3
-                visible: popup.phase === "downloading" && text.length > 0
-                horizontalAlignment: Text.AlignHCenter
-                text: fluxUpdater ? fluxUpdater.progressText : ""
-                color: Theme.textMute
-                font.family: Theme.monoFamily
-                font.pixelSize: 10
-            }
-
-            Item { Layout.fillHeight: true }
-
-            // Error recovery actions (only if an active download failed)
-            RowLayout {
-                Layout.fillWidth: true
-                Layout.bottomMargin: 8
+                anchors.centerIn: parent
                 visible: popup.phase === "error"
-                spacing: 8
+                text: "Update Interrupted"
+                color: "#FF5D5D"
+                font.family: "Segoe UI"
+                font.pixelSize: 13
+                font.bold: true
+            }
+        }
 
-                FluxButton {
-                    Layout.fillWidth: true
-                    implicitHeight: 32
-                    text: "Retry"
-                    onClicked: {
-                        if (fluxUpdater) {
-                            popup.phase = "downloading"
-                            fluxUpdater.startUpdate()
-                        }
+        // ---- Exact Discord Progress Bar (#3E4248) ----
+        // Shown during actual update (downloading / installing)
+        Rectangle {
+            id: progressTrack
+            width: 180
+            height: 8
+            radius: 4
+            color: "#34383E"
+            anchors.horizontalCenter: parent.horizontalCenter
+            anchors.top: textArea.bottom
+            anchors.topMargin: 16
+            visible: popup.phase === "downloading" || popup.phase === "installing"
+            clip: true
+
+            Rectangle {
+                id: progressFill
+                height: parent.height
+                radius: parent.radius
+                color: "#4E545E"
+                width: {
+                    if (popup.phase === "downloading") {
+                        var p = fluxUpdater ? fluxUpdater.progress : 0
+                        return Math.max(8, parent.width * p)
                     }
+                    return parent.width
                 }
 
-                FluxButton {
-                    Layout.fillWidth: true
-                    implicitHeight: 32
-                    variant: "secondary"
-                    text: "Open App"
+                Behavior on width { NumberAnimation { duration: 150; easing.type: Easing.OutCubic } }
+            }
+        }
+
+        // Error Retry / Skip Buttons
+        RowLayout {
+            anchors.horizontalCenter: parent.horizontalCenter
+            anchors.top: textArea.bottom
+            anchors.topMargin: 12
+            visible: popup.phase === "error"
+            spacing: 8
+
+            Rectangle {
+                width: 76
+                height: 28
+                radius: 4
+                color: retryMouse.containsMouse ? "#4752C4" : "#5865F2"
+                Text {
+                    anchors.centerIn: parent
+                    text: "Retry"
+                    color: "#FFFFFF"
+                    font.family: "Segoe UI"
+                    font.pixelSize: 12
+                    font.weight: Font.DemiBold
+                }
+                MouseArea {
+                    id: retryMouse
+                    anchors.fill: parent
+                    hoverEnabled: true
+                    cursorShape: Qt.PointingHandCursor
+                    onClicked: if (fluxUpdater) { popup.phase = "downloading"; fluxUpdater.startUpdate() }
+                }
+            }
+
+            Rectangle {
+                width: 86
+                height: 28
+                radius: 4
+                color: skipMouse.containsMouse ? "#40444B" : "#36393F"
+                Text {
+                    anchors.centerIn: parent
+                    text: "Continue"
+                    color: "#DCDDDE"
+                    font.family: "Segoe UI"
+                    font.pixelSize: 12
+                }
+                MouseArea {
+                    id: skipMouse
+                    anchors.fill: parent
+                    hoverEnabled: true
+                    cursorShape: Qt.PointingHandCursor
                     onClicked: popup.proceedToApp()
                 }
-            }
-
-            // Progress Bar (indeterminate while checking, determinate while downloading/starting)
-            Rectangle {
-                id: progressTrack
-                Layout.fillWidth: true
-                implicitHeight: 5
-                radius: 2.5
-                color: Theme.surfaceTop
-                visible: popup.phase !== "error"
-                clip: true
-
-                // Determinate bar (downloading / installing / starting)
-                Rectangle {
-                    visible: popup.phase !== "checking"
-                    height: parent.height
-                    radius: parent.radius
-                    color: Theme.accent
-                    width: {
-                        if (popup.phase === "downloading") {
-                            return Math.max(6, parent.width * (fluxUpdater ? fluxUpdater.progress : 0))
-                        }
-                        return parent.width
-                    }
-
-                    Behavior on width { NumberAnimation { duration: 140; easing.type: Easing.OutCubic } }
-                }
-
-                // Indeterminate sliding bar (checking)
-                Rectangle {
-                    id: indeterminateBar
-                    visible: popup.phase === "checking"
-                    width: parent.width * 0.38
-                    height: parent.height
-                    radius: parent.radius
-                    color: Theme.accent
-                    x: -width
-
-                    SequentialAnimation on x {
-                        loops: Animation.Infinite
-                        running: indeterminateBar.visible && popup.visible
-                        NumberAnimation {
-                            from: -indeterminateBar.width
-                            to: progressTrack.width
-                            duration: 1050
-                            easing.type: Easing.InOutCubic
-                        }
-                    }
-                }
-            }
-
-            Item { Layout.preferredHeight: 12 }
-
-            // Version footer
-            Text {
-                Layout.alignment: Qt.AlignHCenter
-                text: "v" + (fluxUpdater ? fluxUpdater.currentVersion : "")
-                color: Theme.textMute
-                font.family: Theme.monoFamily
-                font.pixelSize: 10
-                font.letterSpacing: 0.8
             }
         }
     }

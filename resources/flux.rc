@@ -1,6 +1,7 @@
 #include <windows.h>
 
 IDI_ICON1 ICON "flux.ico"
+IDR_V2_PNG RCDATA "v2.png"
 
 VS_VERSION_INFO VERSIONINFO
 FILEVERSION     1,5,1,0

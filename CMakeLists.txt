@@ -132,6 +132,9 @@ qt_add_qml_module(FLUX
         qml/components/StartupPopup.qml
         qml/components/TelepartyMenu.qml
         qml/components/CardMenu.qml
+    RESOURCES
+        resources/flux.png
+        resources/v2.png
 )
 
 target_link_libraries(FLUX PRIVATE

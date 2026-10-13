@@ -93,7 +93,7 @@ Function .onInit
     ; Extract and launch the 60 FPS Discord-style setup splash popup
     InitPluginsDir
     StrCpy $ProgressFile "$PLUGINSDIR\progress.txt"
-    !insertmacro WriteProgress "8|Preparing FLUX v${VERSION}..."
+    !insertmacro WriteProgress "12|INSTALLING UPDATE 1 OF 1"
 
     SetOutPath "$PLUGINSDIR"
     File "..\build\Release\FluxSetupSplash.exe"
@@ -105,17 +105,17 @@ FunctionEnd
 Section "FLUX" SecMain
     SectionIn RO
 
-    !insertmacro WriteProgress "15|Closing running instances..."
+    !insertmacro WriteProgress "20|INSTALLING UPDATE 1 OF 1"
 
     ; Close any running FLUX instance so files are unlocked
     nsExec::ExecToStack 'taskkill /F /IM FLUX.exe'
 
-    !insertmacro WriteProgress "25|Installing FLUX application files..."
+    !insertmacro WriteProgress "35|INSTALLING UPDATE 1 OF 1"
     SetOutPath "$INSTDIR"
     File /r "..\dist\FLUX-${VERSION}\*.*"
 
     ; Write uninstaller
-    !insertmacro WriteProgress "88|Registering application..."
+    !insertmacro WriteProgress "88|INSTALLING UPDATE 1 OF 1"
     WriteUninstaller "$INSTDIR\Uninstall.exe"
 
     ; Per-user Registry keys (no admin elevation required)
@@ -133,17 +133,17 @@ Section "FLUX" SecMain
     WriteRegDWORD HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\FLUX" "NoRepair" 1
 
     ; Shortcuts
-    !insertmacro WriteProgress "94|Creating shortcuts..."
+    !insertmacro WriteProgress "94|INSTALLING UPDATE 1 OF 1"
     CreateDirectory "$SMPROGRAMS\FLUX"
     CreateShortcut "$SMPROGRAMS\FLUX\FLUX.lnk" "$INSTDIR\FLUX.exe" "" "$INSTDIR\resources\flux.ico" 0
     CreateShortcut "$SMPROGRAMS\FLUX\Uninstall FLUX.lnk" "$INSTDIR\Uninstall.exe" "" "$INSTDIR\Uninstall.exe" 0
     CreateShortcut "$DESKTOP\FLUX.lnk" "$INSTDIR\FLUX.exe" "" "$INSTDIR\resources\flux.ico" 0
 
-    !insertmacro WriteProgress "100|Starting FLUX..."
+    !insertmacro WriteProgress "100|STARTING..."
 
     StrCmp $NoGuiMode "1" skip_launch
     Sleep 450
-    !insertmacro WriteProgress "DONE|Starting FLUX..."
+    !insertmacro WriteProgress "DONE|STARTING..."
     Exec '"$INSTDIR\FLUX.exe"'
     Sleep 550
     skip_launch:
