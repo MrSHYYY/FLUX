@@ -17,7 +17,9 @@
   <img alt="In active development" src="https://img.shields.io/badge/status-active%20development-e50914">
 </p>
 
-<div align="center"><a href="https://github.com/shifatsrm09/FLUX/releases/download/v1.6.1/FLUX-1.6.1-Setup.exe" aria-label="Download FLUX setup installer"><img src="resources/download-cta.svg" alt="Download FLUX" width="151" height="46"></a><img src="resources/download-count-label.svg" alt="" width="132" height="46"><img src="https://img.shields.io/github/downloads/shifatsrm09/FLUX/total?label=&amp;style=flat-square&amp;color=303238&amp;cacheSeconds=60" alt="Live total release downloads" height="20" align="middle"><img src="resources/download-count-tail.svg" alt="" width="18" height="46"></div>
+<p align="center">
+  <a href="https://github.com/shifatsrm09/FLUX/releases/download/v1.6.1/FLUX-1.6.1-Setup.exe" aria-label="Download FLUX setup installer"><img src="https://img.shields.io/badge/-DOWNLOAD%20FLUX-5865F2?style=for-the-badge" height="38" alt="Download FLUX"></a><a href="https://github.com/shifatsrm09/FLUX/releases" aria-label="View releases"><img src="https://img.shields.io/github/downloads/shifatsrm09/FLUX/total?label=TOTAL%20DOWNLOADS:&amp;style=for-the-badge&amp;color=313338&amp;labelColor=313338" height="38" alt="Total Downloads"></a>
+</p>
 
 <p align="center">
   <a href="https://github.com/shifatsrm09/FLUX/releases/latest">All Releases &amp; Portable (.zip)</a>
