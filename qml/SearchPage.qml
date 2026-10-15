@@ -260,6 +260,7 @@ Item {
 
                 width: homeColumn.width
                 height: trendingLayout.y + trendingLayout.implicitHeight + 40
+                implicitHeight: height
 
                 readonly property real availableWidth: homeColumn.availableWidth
                 readonly property int trendingCols: homeColumn.cols
@@ -442,6 +443,163 @@ Item {
                         }
 
                         Item { Layout.fillWidth: true }
+                    }
+                }
+            }
+
+            // ---- Top Picks (Dhaka Flix) ------------------------------------------------
+            Item {
+                id: topPicksSection
+
+                width: homeColumn.width
+                height: topPicksLayout.y + topPicksLayout.implicitHeight + 48
+                implicitHeight: height
+
+                readonly property real availableWidth: homeColumn.availableWidth
+                readonly property int picksCols: homeColumn.cols
+                readonly property real picksCardW: homeColumn.cardW
+                readonly property real picksCardH: homeColumn.cardH
+
+                readonly property var topPicksList: [
+                    {
+                        "title": "The Shawshank Redemption (1994) 1080p BluRay x265",
+                        "url": "http://172.16.50.14/DHAKA-FLIX-14/English%20Movies%20%281080p%29/%281995%29%201080p%20%26%20Before/The%20Shawshank%20Redemption%20%281994%29%201080p/The%20Shawshank%20Redemption%20%281994%29%20RM4K%201080p%20BluRay%20x265%20HEVC%2010bit%20AAC%205.1%20ESub-afm72.mkv",
+                        "posterUrl": "https://image.tmdb.org/t/p/w500/9cqNxx0GxF0bflZmeSMuL5tnGzr.jpg",
+                        "extraInfo": "Top Pick"
+                    },
+                    {
+                        "title": "The Batman (2022) 1080p BluRay x265",
+                        "url": "http://172.16.50.14/DHAKA-FLIX-14/English%20Movies%20%281080p%29/%282022%29%201080p/The%20Batman%20%282022%29%201080p/The%20Batman%20%282022%29%201080p%20BluRay%20x265%20HEVC%2010bit%20AAC%207.1%20ESub-Pahe.mkv",
+                        "posterUrl": "https://image.tmdb.org/t/p/w500/74xTEgt7R36Fpooo50r9T25onhq.jpg",
+                        "extraInfo": "Top Pick"
+                    },
+                    {
+                        "title": "Interstellar (2014) 1080p BluRay x265 Dual Audio",
+                        "url": "http://172.16.50.14/DHAKA-FLIX-14/English%20Movies%20%281080p%29/%282014%29%201080p/Interstellar%20%282014%29%201080p%20%5BDual%20Audio%5D/Interstellar%20%282014%29%20IMAX%201080p%20BluRay%20x265%20HEVC%20ESub%20%5BDual%20Audio%5D%5BHindi%205.1%2BEnglish%205.1%5D%20-mkvC.mkv",
+                        "posterUrl": "https://image.tmdb.org/t/p/w500/gEU2QniE6E77NI6lCU6MxlNBvIx.jpg",
+                        "extraInfo": "Top Pick"
+                    },
+                    {
+                        "title": "Spider-Man - Brand New Day (2026) 1080p AMZN Dual Audio",
+                        "url": "http://172.16.50.14/DHAKA-FLIX-14/English%20Movies%20%281080p%29/%282026%29%201080p/Spider-Man%20-%20Brand%20New%20Day%20%282026%29%201080p%20AMZN%20%5BDual%20Audio%5D/Spider-Man%20Brand%20New%20Day%20%282026%29%20IMAX%201080p%20AMZN-WEB%20x265%20HEVC%20ESub%20%5BDual%20Audio%5D%5BHindi%205.1%2BEnglish%205.1%5D%20-HDHub.mkv",
+                        "posterUrl": "https://image.tmdb.org/t/p/w500/bjiS5ipwxb9JFy3XRRN4OAilSeX.jpg",
+                        "extraInfo": "Top Pick"
+                    },
+                    {
+                        "title": "Shutter Island (2010) 720p BluRay x264 Dual Audio",
+                        "url": "http://172.16.50.7/DHAKA-FLIX-7/English%20Movies/%282010%29/Shutter%20Island%20%282010%29%20720p%20%5BDual%20Audio%5D/Shutter%20Island%20%282010%29%20720p%20BluRay%20x264%20ESub%20%5BDual%20Audio%5D%5BHindi%205.1%2BEnglish%205.1%5D%20-%20mkvC.mkv",
+                        "posterUrl": "https://image.tmdb.org/t/p/w500/nrmXQ0zcZUL8jFLrakWc90IR8z9.jpg",
+                        "extraInfo": "Top Pick"
+                    },
+                    {
+                        "title": "Fight Club (1999) 1080p BluRay x265",
+                        "url": "http://172.16.50.14/DHAKA-FLIX-14/English%20Movies%20%281080p%29/%281999%29%201080p/Fight%20Club%20%281999%29%201080p/Fight%20Club%20%281999%29%20RM%201080p%20BluRay%20x265%20HEVC%2010bit%20AAC%207.1%20MSubs-Tigole.mkv",
+                        "posterUrl": "https://image.tmdb.org/t/p/w500/pB8BM7pdSp6B6Ih7QZ4DrQ3PmJK.jpg",
+                        "extraInfo": "Top Pick"
+                    },
+                    {
+                        "title": "The Prestige (2006) 1080p BluRay x265",
+                        "url": "http://172.16.50.14/DHAKA-FLIX-14/English%20Movies%20%281080p%29/%282006%29%201080p/The%20Prestige%20%282006%29%201080p/The%20Prestige%20%282006%29%201080p%20BluRay%20x265%20HEVC%2010bit%20AAC%205.1%20ESub-MkvCage.mkv",
+                        "posterUrl": "https://image.tmdb.org/t/p/w500/Ag2B2KHKQPukjH7WutmgnnSNurZ.jpg",
+                        "extraInfo": "Top Pick"
+                    }
+                ]
+
+                Component.onCompleted: {
+                    if (fluxUser) {
+                        for (var i = 0; i < topPicksList.length; ++i) {
+                            fluxUser.rememberPoster(topPicksList[i].url, topPicksList[i].posterUrl, topPicksList[i].title)
+                        }
+                    }
+                }
+
+                ColumnLayout {
+                    id: topPicksLayout
+                    x: root.pageMargin
+                    y: 10
+                    width: topPicksSection.availableWidth
+                    spacing: 16
+
+                    // Header row
+                    RowLayout {
+                        Layout.fillWidth: true
+                        spacing: 12
+
+                        Text {
+                            text: "Top Picks"
+                            color: Theme.text
+                            font.pixelSize: 22
+                            font.weight: Font.Bold
+                            font.letterSpacing: -0.3
+                        }
+
+                        Rectangle {
+                            height: 20
+                            radius: 10
+                            color: Theme.accentSoft
+                            border.width: 1
+                            border.color: Theme.accentRing
+                            implicitWidth: topPicksBadgeText.implicitWidth + 14
+
+                            Text {
+                                id: topPicksBadgeText
+                                anchors.centerIn: parent
+                                text: "Dhaka Flix"
+                                color: Theme.accent
+                                font.pixelSize: 11
+                                font.weight: Font.Bold
+                            }
+                        }
+
+                        Item { Layout.fillWidth: true }
+
+                        Text {
+                            text: topPicksSection.topPicksList.length + " classics"
+                            color: Theme.textDim
+                            font.pixelSize: 12
+                        }
+                    }
+
+                    // Grid of cards
+                    Grid {
+                        id: topPicksGrid
+                        Layout.fillWidth: true
+                        columns: topPicksSection.picksCols
+                        columnSpacing: 14
+                        rowSpacing: 14
+
+                        Repeater {
+                            model: topPicksSection.topPicksList
+
+                            delegate: SearchResultCard {
+                                required property var modelData
+                                required property int index
+
+                                width: topPicksSection.picksCardW
+                                height: topPicksSection.picksCardH
+                                title: modelData.title
+                                playUrl: modelData.url
+                                posterUrl: modelData.posterUrl || ""
+                                isFolder: false
+                                libraryName: "DHAKA FLIX"
+                                progress: 0
+                                showRemove: false
+                                extraInfo: modelData.extraInfo || "Top Pick"
+                                introDelay: Math.min(index, 7) * 35
+
+                                onPlayRequested: function(url, itemTitle) {
+                                    root.playMediaRequested(url, itemTitle)
+                                }
+
+                                onFolderRequested: function(url, libName) {
+                                    if (fluxBrowser) fluxBrowser.open(url, libName, "")
+                                }
+
+                                onDownloadRequested: function(url, itemTitle, isPack) {
+                                    root.startDownload(url, itemTitle, isPack)
+                                }
+                            }
+                        }
                     }
                 }
             }
