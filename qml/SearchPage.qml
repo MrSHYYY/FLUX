@@ -265,7 +265,7 @@ Item {
                 id: trendingSection
 
                 width: homeColumn.width
-                visible: !!fluxSearch && fluxSearch.trending && fluxSearch.trending.length > 0
+                visible: (fluxUser ? fluxUser.server2Available : true) && !!fluxSearch && fluxSearch.trending && fluxSearch.trending.length > 0
                 height: visible ? (trendingLayout.y + trendingLayout.implicitHeight + 40) : 0
                 implicitHeight: height
 
@@ -747,7 +747,14 @@ Item {
                             Text {
                                 id: topPicksBadgeText
                                 anchors.centerIn: parent
-                                text: (fluxUser && fluxUser.activeServer === 2) ? "ICC FTP" : "Dhaka Flix"
+                                text: {
+                                    if (fluxUser) {
+                                        if (!fluxUser.server2Available && fluxUser.server1Available) return "Dhaka Flix"
+                                        if (!fluxUser.server1Available && fluxUser.server2Available) return "ICC FTP"
+                                        return fluxUser.activeServer === 2 ? "ICC FTP" : "Dhaka Flix"
+                                    }
+                                    return "Dhaka Flix"
+                                }
                                 color: Theme.accent
                                 font.pixelSize: 11
                                 font.weight: Font.Bold
@@ -816,7 +823,14 @@ Item {
                                 required property var modelData
                                 required property int index
 
-                                readonly property bool preferIcc: (fluxUser && fluxUser.activeServer === 2 && modelData.altUrl && modelData.altUrl.length > 0)
+                                readonly property bool preferIcc: {
+                                    if (fluxUser) {
+                                        if (!fluxUser.server2Available && fluxUser.server1Available) return false
+                                        if (!fluxUser.server1Available && fluxUser.server2Available) return true
+                                        return (fluxUser.activeServer === 2 && modelData.altUrl && modelData.altUrl.length > 0)
+                                    }
+                                    return false
+                                }
                                 readonly property string effectiveUrl: preferIcc ? modelData.altUrl : modelData.url
                                 readonly property string fallbackUrl: preferIcc ? modelData.url : (modelData.altUrl || "")
 

@@ -161,7 +161,19 @@ ApplicationWindow {
         currentAltUrl = (altUrl && altUrl.length > 0) ? altUrl : ""
         if (url && url.indexOf("player.php") !== -1 && fluxSearch) {
             fluxSearch.resolvePlayUrl(url, function(directUrl) {
-                playResolvedMedia(url, (directUrl && directUrl.length > 0) ? directUrl : url, title)
+                if (directUrl && directUrl.length > 0) {
+                    playResolvedMedia(url, directUrl, title)
+                } else if (currentAltUrl.length > 0) {
+                    var alt = currentAltUrl
+                    currentAltUrl = ""
+                    console.log("[Main] Failed to resolve play URL, auto-falling back to altUrl:", alt)
+                    if (playerView && playerView.showOsd) {
+                        playerView.showOsd("Primary server unavailable. Auto-switching...", -1)
+                    }
+                    playMedia(alt, title, "")
+                } else {
+                    playResolvedMedia(url, url, title)
+                }
             })
             return
         }
@@ -210,6 +222,10 @@ ApplicationWindow {
         if (fluxBrowser) fluxBrowser.findNext(sourceUrl)
 
         playerView.offerResume(resumeMs)
+
+        if (playerView && playerView.armTimeoutWatchdog) {
+            playerView.armTimeoutWatchdog()
+        }
 
         if (fluxPlayer) {
             if (resumeMs > 0) {

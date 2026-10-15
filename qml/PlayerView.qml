@@ -104,6 +104,63 @@ Rectangle {
 
     readonly property bool menuOpen: controlsBar.menuOpen || root.episodesPanelOpen
     readonly property bool hasError: (!!root.player && root.player.state === "Error")
+    readonly property bool isPlaying: (!!root.player && root.player.isPlaying)
+
+    function armTimeoutWatchdog() {
+        if (window && window.currentAltUrl && window.currentAltUrl.length > 0) {
+            streamTimeoutTimer.restart()
+        } else {
+            streamTimeoutTimer.stop()
+        }
+    }
+
+    onIsPlayingChanged: {
+        if (root.isPlaying) {
+            streamTimeoutTimer.stop()
+        }
+    }
+
+    onHasErrorChanged: {
+        if (root.hasError && window && window.currentAltUrl && window.currentAltUrl.length > 0) {
+            var alt = window.currentAltUrl
+            window.currentAltUrl = ""
+            streamTimeoutTimer.stop()
+            autoFallbackTimer.targetUrl = alt
+            autoFallbackTimer.targetTitle = window.currentPlayingTitle
+            autoFallbackTimer.restart()
+        }
+    }
+
+    Timer {
+        id: autoFallbackTimer
+        interval: 100
+        repeat: false
+        property string targetUrl: ""
+        property string targetTitle: ""
+        onTriggered: {
+            if (targetUrl.length > 0) {
+                root.showOsd("Playback failed. Auto-switching to alternative server...", -1)
+                window.playMedia(targetUrl, targetTitle, "")
+            }
+        }
+    }
+
+    Timer {
+        id: streamTimeoutTimer
+        interval: 6500
+        repeat: false
+        onTriggered: {
+            if (window && window.currentAltUrl && window.currentAltUrl.length > 0) {
+                if (root.player && !root.player.isPlaying && root.player.timeMs === 0) {
+                    var alt = window.currentAltUrl
+                    window.currentAltUrl = ""
+                    root.showOsd("Connection timed out. Auto-switching to alternative server...", -1)
+                    window.playMedia(alt, window.currentPlayingTitle, "")
+                }
+            }
+        }
+    }
+
     readonly property bool buffering: (!!root.player && root.player.isBuffering)
     readonly property bool showCenterPlay: (!!root.player && !root.buffering && !root.hasError
                                             && (root.player.state === "Paused"

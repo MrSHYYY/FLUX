@@ -30,6 +30,8 @@ class UserStore : public QObject {
     Q_PROPERTY(bool autoplayNext READ autoplayNext WRITE setAutoplayNext NOTIFY autoplayNextChanged)
     Q_PROPERTY(bool topPicksFirst READ topPicksFirst WRITE setTopPicksFirst NOTIFY topPicksFirstChanged)
     Q_PROPERTY(int activeServer READ activeServer WRITE setActiveServer NOTIFY serverChanged)
+    Q_PROPERTY(bool server1Available READ isServer1Available NOTIFY serverAvailabilityChanged)
+    Q_PROPERTY(bool server2Available READ isServer2Available NOTIFY serverAvailabilityChanged)
     Q_PROPERTY(QString iccftpUrl READ iccftpUrl WRITE setIccftpUrl NOTIFY serverChanged)
     Q_PROPERTY(QString iccftpSession READ iccftpSession WRITE setIccftpSession NOTIFY serverChanged)
     // Bumps when a poster is remembered; QML bindings read it to pick up new posters
@@ -55,6 +57,9 @@ public:
     // The setters are Q_INVOKABLE so QML can call them as methods as well as assign the properties
     int activeServer() const;
     Q_INVOKABLE void setActiveServer(int server);
+    bool isServer1Available() const { return m_server1Available; }
+    bool isServer2Available() const { return m_server2Available; }
+    Q_INVOKABLE void autoDetectServer();
     QString iccftpUrl() const;
     Q_INVOKABLE void setIccftpUrl(const QString &url);
     QString iccftpSession() const;
@@ -103,6 +108,7 @@ signals:
     void autoplayNextChanged();
     void topPicksFirstChanged();
     void serverChanged();
+    void serverAvailabilityChanged();
     void postersChanged();
     void autoFetchPostersChanged();
     void tmdbApiKeyChanged();
@@ -178,6 +184,8 @@ private:
     QTimer m_saveTimer;      // debounced disk writes
     QTimer m_settingsTimer;  // debounced QSettings sync
     bool m_dirty = false;
+    bool m_server1Available = true;
+    bool m_server2Available = true;
 };
 
 } // namespace Flux

@@ -257,6 +257,11 @@ UserStore::UserStore(QObject *parent)
     m_settingsTimer.setInterval(1000);
     connect(&m_settingsTimer, &QTimer::timeout, this, [this]() { m_settings.sync(); });
 
+    // Auto-detect server connectivity on startup (non-blocking)
+    QTimer::singleShot(400, this, [this]() {
+        autoDetectServer();
+    });
+
     FLUX_LOG_INFO("UserStore", QString("Settings: %1 | History: %2 (%3 entries)")
                   .arg(m_settings.fileName(), m_historyPath).arg(m_history.size()));
 }
@@ -678,6 +683,79 @@ void UserStore::setTmdbApiKey(const QString &key) {
     emit tmdbApiKeyChanged();
 }
 
+void UserStore::autoDetectServer() {
+    auto *nam = new QNetworkAccessManager(this);
+    auto *pendingCount = new int(2);
+    auto *s1Ok = new bool(false);
+    auto *s2Ok = new bool(false);
+
+    auto checkDone = [this, nam, pendingCount, s1Ok, s2Ok]() {
+        (*pendingCount)--;
+        if (*pendingCount == 0) {
+            nam->deleteLater();
+            const bool s1 = *s1Ok;
+            const bool s2 = *s2Ok;
+            delete pendingCount;
+            delete s1Ok;
+            delete s2Ok;
+
+            m_server1Available = s1;
+            m_server2Available = s2;
+            emit serverAvailabilityChanged();
+
+            FLUX_LOG_INFO("UserStore", QStringLiteral("Server auto-detection complete: Dhaka Flix = %1, ICC FTP = %2")
+                          .arg(s1 ? QStringLiteral("OK") : QStringLiteral("DOWN"))
+                          .arg(s2 ? QStringLiteral("OK") : QStringLiteral("DOWN")));
+
+            if (s1 && !s2) {
+                if (activeServer() != 1) {
+                    FLUX_LOG_INFO("UserStore", "Only Dhaka Flix is accessible on this ISP/network. Auto-switching to Server 1.");
+                    setActiveServer(1);
+                }
+            } else if (!s1 && s2) {
+                if (activeServer() != 2) {
+                    FLUX_LOG_INFO("UserStore", "Only ICC FTP is accessible on this ISP/network. Auto-switching to Server 2.");
+                    setActiveServer(2);
+                }
+            }
+        }
+    };
+
+    // Probe Server 1 (Dhaka Flix)
+    QUrl s1Url(QStringLiteral("http://172.16.50.7/DHAKA-FLIX-7/"));
+    QNetworkRequest s1Req(s1Url);
+    s1Req.setAttribute(QNetworkRequest::RedirectPolicyAttribute, QNetworkRequest::NoLessSafeRedirectPolicy);
+    s1Req.setTransferTimeout(3500);
+    QNetworkReply *s1Reply = nam->get(s1Req);
+    connect(s1Reply, &QNetworkReply::finished, this, [s1Reply, s1Ok, checkDone]() {
+        s1Reply->deleteLater();
+        if (s1Reply->error() == QNetworkReply::NoError) {
+            const int code = s1Reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
+            if (code >= 200 && code < 400) {
+                *s1Ok = true;
+            }
+        }
+        checkDone();
+    });
+
+    // Probe Server 2 (ICC FTP)
+    QUrl s2Url(iccftpUrl());
+    QNetworkRequest s2Req(s2Url);
+    s2Req.setAttribute(QNetworkRequest::RedirectPolicyAttribute, QNetworkRequest::NoLessSafeRedirectPolicy);
+    s2Req.setTransferTimeout(3500);
+    QNetworkReply *s2Reply = nam->get(s2Req);
+    connect(s2Reply, &QNetworkReply::finished, this, [s2Reply, s2Ok, checkDone]() {
+        s2Reply->deleteLater();
+        if (s2Reply->error() == QNetworkReply::NoError) {
+            const int code = s2Reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
+            if (code >= 200 && code < 400) {
+                *s2Ok = true;
+            }
+        }
+        checkDone();
+    });
+}
+
 void UserStore::testServerConnection(int server, const QString &customUrl, const QJSValue &callback) {
     auto *nam = new QNetworkAccessManager(this);
     QUrl targetUrl;
@@ -689,6 +767,7 @@ void UserStore::testServerConnection(int server, const QString &customUrl, const
 
     QNetworkRequest request(targetUrl);
     request.setAttribute(QNetworkRequest::RedirectPolicyAttribute, QNetworkRequest::NoLessSafeRedirectPolicy);
+    request.setTransferTimeout(5000);
     QNetworkReply *reply = nam->get(request);
 
     connect(reply, &QNetworkReply::finished, this, [nam, reply, callback]() mutable {
