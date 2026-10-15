@@ -641,87 +641,100 @@ Item {
             Item { Layout.fillWidth: true }
         }
 
-        // 2. Search bar
+        // 2. Search bar (compact horizontal width, centered)
         RowLayout {
             Layout.fillWidth: true
-            spacing: 12
+            Layout.topMargin: 2
+            Layout.bottomMargin: 2
 
-            Rectangle {
-                Layout.fillWidth: true
-                Layout.preferredHeight: 48
-                radius: 24
-                color: Theme.surface
-                border.width: topSearchInput.activeFocus ? 2 : 1
-                border.color: topSearchInput.activeFocus ? Theme.accent : Theme.border
+            Item { Layout.fillWidth: true }
 
-                Behavior on border.color { ColorAnimation { duration: 180 } }
+            RowLayout {
+                id: searchBarInnerRow
+                Layout.preferredWidth: Math.min(480, Math.max(300, Math.round(resultsView.width * 0.45)))
+                Layout.maximumWidth: Math.min(480, Math.max(300, Math.round(resultsView.width * 0.45)))
+                implicitWidth: Math.min(480, Math.max(300, Math.round(resultsView.width * 0.45)))
+                spacing: 10
 
-                RowLayout {
-                    anchors.fill: parent
-                    anchors.leftMargin: 18
-                    anchors.rightMargin: 8
-                    spacing: 12
+                Rectangle {
+                    Layout.fillWidth: true
+                    Layout.preferredHeight: 44
+                    radius: 22
+                    color: Theme.surface
+                    border.width: topSearchInput.activeFocus ? 2 : 1
+                    border.color: topSearchInput.activeFocus ? Theme.accent : Theme.border
 
-                    FluxIcon {
-                        name: "search"
-                        size: 20
-                        color: topSearchInput.activeFocus ? Theme.text : Theme.textMute
-                        Layout.alignment: Qt.AlignVCenter
-                    }
+                    Behavior on border.color { ColorAnimation { duration: 180 } }
 
-                    TextField {
-                        id: topSearchInput
-                        Layout.fillWidth: true
-                        text: fluxSearch ? fluxSearch.query : ""
-                        placeholderText: "Search movies, shows, episodes..."
-                        placeholderTextColor: Theme.textMute
-                        font.pixelSize: 14
-                        color: Theme.text
-                        selectedTextColor: "#FFFFFF"
-                        selectionColor: Theme.accent
-                        background: null
+                    RowLayout {
+                        anchors.fill: parent
+                        anchors.leftMargin: 16
+                        anchors.rightMargin: 8
+                        spacing: 10
 
-                        onAccepted: {
-                            if (fluxSearch && text.trim().length > 0) {
-                                categoryFilter.isExpanded = false
-                                fluxSearch.search(text.trim())
+                        FluxIcon {
+                            name: "search"
+                            size: 18
+                            color: topSearchInput.activeFocus ? Theme.text : Theme.textMute
+                            Layout.alignment: Qt.AlignVCenter
+                        }
+
+                        TextField {
+                            id: topSearchInput
+                            Layout.fillWidth: true
+                            text: fluxSearch ? fluxSearch.query : ""
+                            placeholderText: "Search movies, shows, episodes..."
+                            placeholderTextColor: Theme.textMute
+                            font.pixelSize: 13
+                            color: Theme.text
+                            selectedTextColor: "#FFFFFF"
+                            selectionColor: Theme.accent
+                            background: null
+
+                            onAccepted: {
+                                if (fluxSearch && text.trim().length > 0) {
+                                    categoryFilter.isExpanded = false
+                                    fluxSearch.search(text.trim())
+                                }
+                            }
+                        }
+
+                        IconButton {
+                            id: topClearBtn
+                            visible: topSearchInput.text.length > 0
+                            iconName: "close"
+                            iconSize: 14
+                            iconColor: Theme.textDim
+                            implicitWidth: 28
+                            implicitHeight: 28
+                            tip: "Clear"
+                            tipAbove: false
+
+                            onClicked: {
+                                topSearchInput.text = ""
+                                if (fluxSearch) fluxSearch.clear()
+                                categoryFilter.isExpanded = true
                             }
                         }
                     }
+                }
 
-                    IconButton {
-                        id: topClearBtn
-                        visible: topSearchInput.text.length > 0
-                        iconName: "close"
-                        iconSize: 14
-                        iconColor: Theme.textDim
-                        implicitWidth: 30
-                        implicitHeight: 30
-                        tip: "Clear"
-                        tipAbove: false
+                FluxButton {
+                    id: topSearchSubmitBtn
+                    text: "Search"
+                    implicitHeight: 44
+                    enabled: !(fluxSearch && fluxSearch.isSearching)
 
-                        onClicked: {
-                            topSearchInput.text = ""
-                            if (fluxSearch) fluxSearch.clear()
-                            categoryFilter.isExpanded = true
+                    onClicked: {
+                        if (fluxSearch && topSearchInput.text.trim().length > 0) {
+                            categoryFilter.isExpanded = false
+                            fluxSearch.search(topSearchInput.text.trim())
                         }
                     }
                 }
             }
 
-            FluxButton {
-                id: topSearchSubmitBtn
-                text: "Search"
-                implicitHeight: 48
-                enabled: !(fluxSearch && fluxSearch.isSearching)
-
-                onClicked: {
-                    if (fluxSearch && topSearchInput.text.trim().length > 0) {
-                        categoryFilter.isExpanded = false
-                        fluxSearch.search(topSearchInput.text.trim())
-                    }
-                }
-            }
+            Item { Layout.fillWidth: true }
         }
 
         // 3. Category filters (collapsible, automatically collapses on search)
