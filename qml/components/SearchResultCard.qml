@@ -18,6 +18,7 @@ Item {
     property string playUrl: ""
     property string localPath: ""
     property string libraryName: ""
+    property string posterUrl: ""
     property bool isPlaying: false
 
     // Watch state
@@ -167,6 +168,18 @@ Item {
             bigText: root.bigText
             isFolder: root.isFolder
             hovered: root.hovered
+            visible: !posterImage.visible || posterImage.status !== Image.Ready
+        }
+
+        // Real image poster (for ICC FTP or any source providing posterUrl)
+        Image {
+            id: posterImage
+            anchors.fill: parent
+            visible: root.posterUrl.length > 0 && status === Image.Ready
+            source: root.posterUrl
+            fillMode: Image.PreserveAspectCrop
+            asynchronous: true
+            cache: true
         }
 
         // Soft top gloss

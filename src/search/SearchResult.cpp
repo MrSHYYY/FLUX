@@ -10,7 +10,8 @@ SearchResult SearchResult::fromJson(const QString &href,
                                      const QString &serverOrigin,
                                      const QString &libraryId,
                                      const QString &libraryName,
-                                     const QString &group) {
+                                     const QString &group,
+                                     const QString &posterUrl) {
     SearchResult result;
     result.rawHref = href;
     result.sizeBytes = isSizeNull ? -1 : size;
@@ -18,6 +19,7 @@ SearchResult SearchResult::fromJson(const QString &href,
     result.libraryId = libraryId;
     result.libraryName = libraryName;
     result.group = group;
+    result.posterUrl = posterUrl;
 
     // Construct full playable URL without altering the server-provided percent-encoding
     // Ensure serverOrigin has no trailing slash and href begins with a slash

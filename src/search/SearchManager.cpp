@@ -5,6 +5,8 @@
 #include <QJsonArray>
 #include <QNetworkRequest>
 #include <QUrl>
+#include <QUrlQuery>
+#include <QRegularExpression>
 #include <QSet>
 #include <algorithm>
 
@@ -13,9 +15,11 @@ namespace Flux {
 SearchManager::SearchManager(QObject *parent)
     : QAbstractListModel(parent)
     , m_libraryModel(std::make_unique<MediaLibraryModel>(this)) {
+    m_libraryModel->loadServer(m_activeServer, m_iccSession);
     // Default selection: English Movies only (falls back to All if the id is missing)
     int count = m_libraryModel->rowCount();
-    int defaultIdx = m_libraryModel->indexOfId("english_movies");
+    int defaultIdx = m_libraryModel->indexOfId("icc_eng_movies");
+    if (defaultIdx < 0) defaultIdx = m_libraryModel->indexOfId("english_movies");
     if (defaultIdx >= 0) {
         m_isAllSelected = (count == 1);
         m_selectedLibraryIndex = defaultIdx;
@@ -56,6 +60,7 @@ QVariant SearchManager::data(const QModelIndex &index, int role) const {
     case RawHrefRole:     return item.rawHref;
     case LibraryNameRole: return item.libraryName;
     case GroupRole:       return item.group;
+    case PosterUrlRole:   return item.posterUrl;
     default:              return QVariant();
     }
 }
@@ -71,6 +76,7 @@ QHash<int, QByteArray> SearchManager::roleNames() const {
     roles[RawHrefRole]     = "rawHref";
     roles[LibraryNameRole] = "libraryName";
     roles[GroupRole]       = "group";
+    roles[PosterUrlRole]   = "posterUrl";
     return roles;
 }
 
@@ -96,6 +102,86 @@ QString SearchManager::selectedLibraryUrl() const {
     if (m_isAllSelected) return "";
     const MediaRoot *root = m_libraryModel->rootAt(m_selectedLibraryIndex);
     return root ? root->url : "";
+}
+
+void SearchManager::setActiveServer(int server) {
+    if (m_activeServer != server) {
+        m_activeServer = server;
+        emit activeServerChanged();
+        if (m_libraryModel) {
+            m_libraryModel->loadServer(m_activeServer, m_iccSession);
+            selectLibrary(0);
+        }
+    }
+}
+
+void SearchManager::setIccftpUrl(const QString &url) {
+    if (m_iccUrl != url) {
+        m_iccUrl = url;
+        emit iccftpSettingsChanged();
+    }
+}
+
+void SearchManager::setIccftpSession(const QString &session) {
+    if (m_iccSession != session) {
+        m_iccSession = session;
+        emit iccftpSettingsChanged();
+        if (m_activeServer == 2 && m_libraryModel) {
+            m_libraryModel->loadServer(m_activeServer, m_iccSession);
+        }
+    }
+}
+
+void SearchManager::resolvePlayUrl(const QString &url, const QJSValue &callback) {
+    if (!url.contains(QLatin1String("player.php"))) {
+        if (callback.isCallable()) {
+            QJSValue cb = callback;
+            cb.call(QJSValueList{url});
+        }
+        return;
+    }
+
+    if (m_resolvedUrls.contains(url)) {
+        if (callback.isCallable()) {
+            QJSValue cb = callback;
+            cb.call(QJSValueList{m_resolvedUrls.value(url)});
+        }
+        return;
+    }
+
+    QNetworkRequest req{QUrl(url, QUrl::TolerantMode)};
+    req.setAttribute(QNetworkRequest::RedirectPolicyAttribute, QNetworkRequest::NoLessSafeRedirectPolicy);
+    req.setTransferTimeout(10000);
+    QNetworkReply *reply = m_networkManager.get(req);
+
+    connect(reply, &QNetworkReply::finished, this, [this, reply, url, callback]() mutable {
+        reply->deleteLater();
+        QString directUrl = url;
+        if (reply->error() == QNetworkReply::NoError) {
+            QString html = QString::fromUtf8(reply->readAll());
+            static const QRegularExpression sourceRx(
+                QStringLiteral("<source\\s+[^>]*src=['\"]([^'\"]+)['\"]"),
+                QRegularExpression::CaseInsensitiveOption);
+            QRegularExpressionMatch match = sourceRx.match(html);
+            if (match.hasMatch()) {
+                directUrl = match.captured(1);
+                m_resolvedUrls[url] = directUrl;
+            } else {
+                static const QRegularExpression dlRx(
+                    QStringLiteral("<a\\s+[^>]*href=['\"]([^'\"]+\\.(?:mp4|mkv|avi))['\"][^>]*download"),
+                    QRegularExpression::CaseInsensitiveOption);
+                QRegularExpressionMatch dlMatch = dlRx.match(html);
+                if (dlMatch.hasMatch()) {
+                    directUrl = dlMatch.captured(1);
+                    m_resolvedUrls[url] = directUrl;
+                }
+            }
+        }
+
+        if (callback.isCallable()) {
+            callback.call(QJSValueList{directUrl});
+        }
+    });
 }
 
 QStringList SearchManager::selectedCategoryIds() const {
@@ -271,6 +357,25 @@ void SearchManager::search(const QString &query) {
         return;
     }
 
+    if (m_activeServer == 2) {
+        m_query = trimmed;
+        emit queryChanged();
+
+        cancel();
+
+        const quint64 searchId = ++m_activeSearchId;
+        setSearching(true);
+        setErrorMessage("");
+        m_accumulatedResults.clear();
+        m_plan = SearchQuery::plan(trimmed, 6);
+
+        setStatusMessage(QString("Searching ICC FTP for \"%1\"...").arg(trimmed));
+        FLUX_LOG_INFO("Search", QString("[#%1] ICC FTP search for \"%2\"").arg(searchId).arg(trimmed));
+
+        startIccSearch(searchId, trimmed);
+        return;
+    }
+
     std::vector<MediaRoot> targetRoots;
     if (m_isAllSelected) {
         int count = m_libraryModel ? m_libraryModel->rowCount() : 0;
@@ -367,6 +472,138 @@ void SearchManager::startStage(quint64 searchId, const QStringList &queries) {
     }
 }
 
+void SearchManager::startIccSearch(quint64 searchId, const QString &query) {
+    QUrl baseUrl(m_iccUrl);
+    if (!baseUrl.isValid() || baseUrl.host().isEmpty()) {
+        baseUrl = QUrl("http://10.16.100.244");
+    }
+    QString commandUrl = QString("%1://%2/command.php").arg(baseUrl.scheme(), baseUrl.authority());
+
+    QNetworkRequest request{QUrl(commandUrl)};
+    request.setHeader(QNetworkRequest::ContentTypeHeader, "application/x-www-form-urlencoded; charset=UTF-8");
+
+    QUrlQuery params;
+    params.addQueryItem("cSearch", query);
+    QByteArray payload = params.toString(QUrl::FullyEncoded).toUtf8();
+
+    m_pendingReplies = 1;
+    QNetworkReply *reply = m_networkManager.post(request, payload);
+    m_activeReplies.push_back(reply);
+
+    connect(reply, &QNetworkReply::finished, this, [this, reply, searchId, baseUrl]() {
+        reply->deleteLater();
+        auto it = std::find(m_activeReplies.begin(), m_activeReplies.end(), reply);
+        if (it != m_activeReplies.end()) {
+            m_activeReplies.erase(it);
+        }
+
+        if (searchId != m_activeSearchId) return;
+
+        if (reply->error() != QNetworkReply::NoError) {
+            setErrorMessage(QString("ICC search error: %1").arg(reply->errorString()));
+            finishSearch(searchId);
+            return;
+        }
+
+        QByteArray data = reply->readAll();
+        QJsonDocument doc = QJsonDocument::fromJson(data);
+        if (!doc.isArray()) {
+            FLUX_LOG_WARN("Search", "ICC search response is not a JSON array");
+            finishSearch(searchId);
+            return;
+        }
+
+        QJsonArray arr = doc.array();
+        static const QRegularExpression seriesRegex(
+            QStringLiteral("(?:Season|Episode|Completed|S\\d{1,2}E\\d{1,2})"),
+            QRegularExpression::CaseInsensitiveOption);
+
+        for (const auto &val : arr) {
+            if (!val.isObject()) continue;
+            QJsonObject obj = val.toObject();
+            QString id = obj["id"].toString();
+            QString name = obj["name"].toString().trimmed();
+            QString image = obj["image"].toString().trimmed();
+            if (id.isEmpty() || name.isEmpty()) continue;
+
+            bool isFolder = seriesRegex.match(name).hasMatch();
+
+            QString playUrl = QString("%1://%2/player.php?play=%3").arg(baseUrl.scheme(), baseUrl.authority(), id);
+            if (!m_iccSession.isEmpty()) {
+                playUrl += "&session=" + m_iccSession;
+            }
+
+            QString posterUrl;
+            if (!image.isEmpty()) {
+                posterUrl = QString("%1://%2/files/%3").arg(baseUrl.scheme(), baseUrl.authority(), image);
+            }
+
+            SearchResult item;
+            item.displayName = name;
+            item.parentPath = isFolder ? QStringLiteral("TV Shows") : QStringLiteral("Movies");
+            item.isFolder = isFolder;
+            item.formattedSize = isFolder ? QStringLiteral("Series") : QString();
+            item.playUrl = playUrl;
+            item.extension = isFolder ? QString() : QStringLiteral("mp4");
+            item.rawHref = playUrl;
+            item.libraryName = QStringLiteral("ICC FTP");
+            item.group = isFolder ? QStringLiteral("TV & Web Series") : QStringLiteral("English Movies");
+            item.posterUrl = posterUrl;
+
+            int score = SearchQuery::score(name, m_plan);
+            item.matchScore = score > 0 ? score : 2;
+
+            m_accumulatedResults.push_back(std::move(item));
+        }
+
+        finishSearch(searchId);
+
+        // Pre-resolve top movie direct links in background
+        for (size_t i = 0; i < std::min<size_t>(m_results.size(), 8); ++i) {
+            if (!m_results[i].isFolder) {
+                resolveDirectUrl(m_results[i].playUrl, static_cast<int>(i));
+            }
+        }
+    });
+}
+
+void SearchManager::resolveDirectUrl(const QString &playUrl, int resultIndex) {
+    if (playUrl.isEmpty() || !playUrl.contains(QLatin1String("player.php"))) return;
+    if (m_resolvedUrls.contains(playUrl)) return;
+
+    QNetworkRequest req{QUrl(playUrl, QUrl::TolerantMode)};
+    req.setAttribute(QNetworkRequest::RedirectPolicyAttribute, QNetworkRequest::NoLessSafeRedirectPolicy);
+    req.setTransferTimeout(8000);
+    QNetworkReply *reply = m_networkManager.get(req);
+
+    connect(reply, &QNetworkReply::finished, this, [this, reply, playUrl, resultIndex]() {
+        reply->deleteLater();
+        if (reply->error() == QNetworkReply::NoError) {
+            QString html = QString::fromUtf8(reply->readAll());
+            static const QRegularExpression sourceRx(
+                QStringLiteral("<source\\s+[^>]*src=['\"]([^'\"]+)['\"]"),
+                QRegularExpression::CaseInsensitiveOption);
+            QRegularExpressionMatch match = sourceRx.match(html);
+            if (match.hasMatch()) {
+                QString directUrl = match.captured(1);
+                m_resolvedUrls[playUrl] = directUrl;
+
+                static const QRegularExpression sizeRx(
+                    QStringLiteral("<strong>DOWNLOAD</strong>\\s*([0-9.]+\\s*[KMGTP]?B)"),
+                    QRegularExpression::CaseInsensitiveOption);
+                QRegularExpressionMatch sizeMatch = sizeRx.match(html);
+                if (sizeMatch.hasMatch() && resultIndex >= 0 && resultIndex < static_cast<int>(m_results.size())) {
+                    if (m_results[resultIndex].playUrl == playUrl) {
+                        m_results[resultIndex].formattedSize = sizeMatch.captured(1).trimmed();
+                        QModelIndex idx = index(resultIndex, 0);
+                        emit dataChanged(idx, idx, {SizeRole});
+                    }
+                }
+            }
+        }
+    });
+}
+
 void SearchManager::cancel() {
     // Take the list first: aborting a reply can emit finished() right away
     std::vector<QNetworkReply*> replies;
@@ -410,6 +647,7 @@ QVariantMap SearchManager::getResult(int index) const {
         map["rawHref"]       = item.rawHref;
         map["libraryName"]   = item.libraryName;
         map["group"]         = item.group;
+        map["posterUrl"]     = item.posterUrl;
     }
     return map;
 }

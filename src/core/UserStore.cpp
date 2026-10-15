@@ -13,6 +13,10 @@
 #include <QRegularExpression>
 #include <QStringList>
 #include <QUrl>
+#include <QUrlQuery>
+#include <QNetworkAccessManager>
+#include <QNetworkRequest>
+#include <QNetworkReply>
 #include <algorithm>
 #include <vector>
 
@@ -358,7 +362,7 @@ QVariantList UserStore::continueWatching() const {
 // ----------------------------------------------------------------------------
 
 void UserStore::removeFromHistory(const QString &url) {
-    if (m_history.remove(keyFor(url)) > 0) {
+    if (m_history.remove(keyFor(url))) {
         m_dirty = true;
         scheduleSave();
         ++m_revision;
@@ -416,6 +420,92 @@ void UserStore::setAutoplayNext(bool enabled) {
     if (autoplayNext() == enabled) return;
     setValue(QStringLiteral("player/autoplayNext"), enabled);
     emit autoplayNextChanged();
+}
+
+int UserStore::activeServer() const {
+    return m_settings.value(QStringLiteral("server/activeServer"), 2).toInt();
+}
+
+void UserStore::setActiveServer(int server) {
+    if (server < 1 || server > 2) server = 1;
+    if (activeServer() != server) {
+        m_settings.setValue(QStringLiteral("server/activeServer"), server);
+        m_settingsTimer.start();
+        emit serverChanged();
+    }
+}
+
+QString UserStore::iccftpUrl() const {
+    return m_settings.value(QStringLiteral("server/iccftpUrl"),
+        QStringLiteral("http://10.16.100.244/dashboard.php?session=b1bdfdae1f7e206b628274ef7eafadcd6094e07c46cd85b157c595174a369f96")).toString();
+}
+
+void UserStore::setIccftpUrl(const QString &url) {
+    QString trimmed = url.trimmed();
+    if (trimmed.isEmpty()) return;
+    m_settings.setValue(QStringLiteral("server/iccftpUrl"), trimmed);
+
+    const QUrl u(trimmed);
+    const QUrlQuery q(u);
+    const QString session = q.queryItemValue(QStringLiteral("session"));
+    if (!session.isEmpty()) {
+        m_settings.setValue(QStringLiteral("server/iccftpSession"), session);
+    }
+    m_settingsTimer.start();
+    emit serverChanged();
+}
+
+QString UserStore::iccftpSession() const {
+    return m_settings.value(QStringLiteral("server/iccftpSession"),
+        QStringLiteral("b1bdfdae1f7e206b628274ef7eafadcd6094e07c46cd85b157c595174a369f96")).toString();
+}
+
+void UserStore::setIccftpSession(const QString &session) {
+    QString trimmed = session.trimmed();
+    if (trimmed.isEmpty()) return;
+    m_settings.setValue(QStringLiteral("server/iccftpSession"), trimmed);
+    m_settingsTimer.start();
+    emit serverChanged();
+}
+
+void UserStore::testServerConnection(int server, const QString &customUrl, const QJSValue &callback) {
+    auto *nam = new QNetworkAccessManager(this);
+    QUrl targetUrl;
+    if (server == 1) {
+        targetUrl = QUrl(customUrl.isEmpty() ? QStringLiteral("http://172.16.50.7/DHAKA-FLIX-7/") : customUrl);
+    } else {
+        targetUrl = QUrl(customUrl.isEmpty() ? iccftpUrl() : customUrl);
+    }
+
+    QNetworkRequest request(targetUrl);
+    request.setAttribute(QNetworkRequest::RedirectPolicyAttribute, QNetworkRequest::NoLessSafeRedirectPolicy);
+    QNetworkReply *reply = nam->get(request);
+
+    connect(reply, &QNetworkReply::finished, this, [nam, reply, callback]() mutable {
+        reply->deleteLater();
+        nam->deleteLater();
+
+        bool ok = false;
+        QString message;
+
+        if (reply->error() == QNetworkReply::NoError) {
+            int code = reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
+            if (code >= 200 && code < 400) {
+                ok = true;
+                message = QStringLiteral("Connection successful! Server responded with HTTP %1.").arg(code);
+            } else {
+                message = QStringLiteral("Server returned HTTP status code %1.").arg(code);
+            }
+        } else {
+            message = reply->errorString();
+        }
+
+        if (callback.isCallable()) {
+            QJSValueList args;
+            args << ok << message;
+            callback.call(args);
+        }
+    });
 }
 
 // ----------------------------------------------------------------------------

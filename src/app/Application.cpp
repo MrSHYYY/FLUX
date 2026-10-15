@@ -94,6 +94,17 @@ bool Application::initialize(QQmlApplicationEngine &engine) {
         savedCategories.removeAll(QString());
         search->restoreSelection(savedCategories);
 
+        // Multi-server settings (1 = Dhaka Flix, 2 = ICC FTP)
+        search->setIccftpUrl(store->iccftpUrl());
+        search->setIccftpSession(store->iccftpSession());
+        search->setActiveServer(store->activeServer());
+
+        connect(store, &UserStore::serverChanged, search, [store, search]() {
+            search->setIccftpUrl(store->iccftpUrl());
+            search->setIccftpSession(store->iccftpSession());
+            search->setActiveServer(store->activeServer());
+        });
+
         // 2c. Persist changes as they happen
         connect(player, &VLCPlayer::volumeChanged, store, [store, player]() {
             store->setValue("audio/volume", player->volume());

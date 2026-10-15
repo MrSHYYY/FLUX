@@ -149,10 +149,19 @@ ApplicationWindow {
     }
 
     function playMedia(url, title) {
-        var sourceUrl = url
-        var playbackUrl = url
+        if (url && url.indexOf("player.php") !== -1 && fluxSearch) {
+            fluxSearch.resolvePlayUrl(url, function(directUrl) {
+                playResolvedMedia(url, (directUrl && directUrl.length > 0) ? directUrl : url, title)
+            })
+            return
+        }
+        playResolvedMedia(url, url, title)
+    }
+
+    function playResolvedMedia(sourceUrl, directUrl, title) {
+        var playbackUrl = directUrl
         // Teleparty is for direct streams only. Offline Library playback stays outside the room.
-        if (window.inTeleparty && fluxSync && !fluxSync.isStreamUrl(url)) {
+        if (window.inTeleparty && fluxSync && !fluxSync.isStreamUrl(sourceUrl)) {
             return
         }
 

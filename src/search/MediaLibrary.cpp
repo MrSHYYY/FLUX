@@ -54,45 +54,86 @@ QHash<int, QByteArray> MediaLibraryModel::roleNames() const {
 }
 
 bool MediaLibraryModel::loadDefault() {
+    return loadServer(1);
+}
+
+bool MediaLibraryModel::loadServer(int serverType, const QString &session) {
+    m_serverType = (serverType == 2) ? 2 : 1;
+    const QString filename = (m_serverType == 2) ? QStringLiteral("resources/icc_library.json")
+                                                 : QStringLiteral("resources/media_library.json");
+
     QString appDir = QCoreApplication::applicationDirPath();
     QStringList candidates = {
-        QDir(appDir).filePath("resources/media_library.json"),
-        QDir(appDir).filePath("../../../resources/media_library.json"),
-        QDir::current().filePath("resources/media_library.json"),
-        ":/resources/media_library.json"
+        QDir(appDir).filePath(filename),
+        QDir(appDir).filePath("../../../" + filename),
+        QDir::current().filePath(filename),
+        ":/" + filename
     };
 
     for (const auto &path : candidates) {
         if (QFile::exists(path)) {
             if (loadFromFile(path)) {
+                if (m_serverType == 2 && !session.isEmpty()) {
+                    for (auto &root : m_roots) {
+                        if (root.url.contains("session=")) {
+                            static const QRegularExpression reSession("session=[a-zA-Z0-9]+");
+                            root.url.replace(reSession, "session=" + session);
+                        }
+                    }
+                }
                 return true;
             }
         }
     }
 
-    FLUX_LOG_WARN("MediaLibrary", "media_library.json file not found in search paths, initializing hardcoded default library roots");
+    FLUX_LOG_WARN("MediaLibrary", QString("Library json file (%1) not found, using hardcoded roots").arg(filename));
 
-    // Fallback: Default 17 official library roots
     beginResetModel();
-    m_roots = {
-        {"english_movies", "English Movies", "Movies", "http://172.16.50.7/DHAKA-FLIX-7/English%20Movies/", "http://172.16.50.7", "/DHAKA-FLIX-7/English%20Movies/"},
-        {"english_movies_1080p", "English Movies 1080p", "Movies", "http://172.16.50.14/DHAKA-FLIX-14/English%20Movies%20%281080p%29/", "http://172.16.50.14", "/DHAKA-FLIX-14/English%20Movies%20%281080p%29/"},
-        {"hindi_movies", "Hindi Movies", "Movies", "http://172.16.50.14/DHAKA-FLIX-14/Hindi%20Movies/", "http://172.16.50.14", "/DHAKA-FLIX-14/Hindi%20Movies/"},
-        {"south_movies", "South Indian Movies", "Movies", "http://172.16.50.14/DHAKA-FLIX-14/SOUTH%20INDIAN%20MOVIES/South%20Movies/", "http://172.16.50.14", "/DHAKA-FLIX-14/SOUTH%20INDIAN%20MOVIES/South%20Movies/"},
-        {"south_movies_hindi_dubbed", "South-Movie Hindi Dubbed", "Movies", "http://172.16.50.14/DHAKA-FLIX-14/SOUTH%20INDIAN%20MOVIES/Hindi%20Dubbed/", "http://172.16.50.14", "/DHAKA-FLIX-14/SOUTH%20INDIAN%20MOVIES/Hindi%20Dubbed/"},
-        {"foreign_movies", "Foreign Movies", "Movies", "http://172.16.50.7/DHAKA-FLIX-7/Foreign%20Language%20Movies/", "http://172.16.50.7", "/DHAKA-FLIX-7/Foreign%20Language%20Movies/"},
-        {"kolkata_bangla_movies", "Kolkata Bangla Movies", "Movies", "http://172.16.50.7/DHAKA-FLIX-7/Kolkata%20Bangla%20Movies/", "http://172.16.50.7", "/DHAKA-FLIX-7/Kolkata%20Bangla%20Movies/"},
-        {"satyajit_ray_films", "Satyajit Ray Films", "Movies", "http://172.16.50.7/DHAKA-FLIX-7/Kolkata%20Bangla%20Movies/Satyajit%20Ray%20Films/", "http://172.16.50.7", "/DHAKA-FLIX-7/Kolkata%20Bangla%20Movies/Satyajit%20Ray%20Films/"},
-        {"animation_movies", "Animation Movies", "Movies", "http://172.16.50.14/DHAKA-FLIX-14/Animation%20Movies/", "http://172.16.50.14", "/DHAKA-FLIX-14/Animation%20Movies/"},
-        {"animation_movies_1080p", "Animation Movies 1080p", "Movies", "http://172.16.50.14/DHAKA-FLIX-14/Animation%20Movies%20%281080p%29/", "http://172.16.50.14", "/DHAKA-FLIX-14/Animation%20Movies%20%281080p%29/"},
-        {"movies_3d", "3D Movies", "Movies", "http://172.16.50.7/DHAKA-FLIX-7/3D%20Movies/", "http://172.16.50.7", "/DHAKA-FLIX-7/3D%20Movies/"},
-        {"tv_web_series", "TV & Web Series", "Series", "http://172.16.50.12/DHAKA-FLIX-12/TV-WEB-Series/", "http://172.16.50.12", "/DHAKA-FLIX-12/TV-WEB-Series/"},
-        {"korean_series", "Korean TV & Web Series", "Series", "http://172.16.50.14/DHAKA-FLIX-14/KOREAN%20TV%20%26%20WEB%20Series/", "http://172.16.50.14", "/DHAKA-FLIX-14/KOREAN%20TV%20%26%20WEB%20Series/"},
-        {"cartoon_tv_series", "Cartoon TV Series", "Series", "http://172.16.50.10/DHAKA-FLIX-10/Anime%20%26%20Cartoon%20TV%20Series/", "http://172.16.50.10", "/DHAKA-FLIX-10/Anime%20%26%20Cartoon%20TV%20Series/"},
-        {"documentary", "Documentary", "Other", "http://172.16.50.10/DHAKA-FLIX-10/Documentary/", "http://172.16.50.10", "/DHAKA-FLIX-10/Documentary/"},
-        {"wwe_aew", "WWE & AEW Wrestling", "Other", "http://172.16.50.10/DHAKA-FLIX-10/WWE%20%26%20AEW%20Wrestling/", "http://172.16.50.10", "/DHAKA-FLIX-10/WWE%20%26%20AEW%20Wrestling/"},
-        {"awards_tv_shows", "Awards & TV Shows", "Other", "http://172.16.50.10/DHAKA-FLIX-10/Awards%20%26%20TV%20Shows/", "http://172.16.50.10", "/DHAKA-FLIX-10/Awards%20%26%20TV%20Shows/"}
-    };
+    if (m_serverType == 2) {
+        const QString s = session.isEmpty() ? QStringLiteral("b1bdfdae1f7e206b628274ef7eafadcd6094e07c46cd85b157c595174a369f96") : session;
+        m_roots = {
+            {"icc_eng_movies", "English Movies", "English Movies", "http://10.16.100.244/dashboard.php?session=" + s + "&category=19", "http://10.16.100.244", "/dashboard.php?category=19"},
+            {"icc_excl_1080p", "Exclusive Full-HD", "English Movies", "http://10.16.100.244/dashboard.php?session=" + s + "&category=44", "http://10.16.100.244", "/dashboard.php?category=44"},
+            {"icc_4k", "4K Movies", "English Movies", "http://10.16.100.244/dashboard.php?session=" + s + "&category=74", "http://10.16.100.244", "/dashboard.php?category=74"},
+            {"icc_3d", "3D Movies", "English Movies", "http://10.16.100.244/dashboard.php?session=" + s + "&category=9", "http://10.16.100.244", "/dashboard.php?category=9"},
+            {"icc_hindi", "Hindi Movies", "Hindi Movies", "http://10.16.100.244/dashboard.php?session=" + s + "&category=2", "http://10.16.100.244", "/dashboard.php?category=2"},
+            {"icc_south_dubbed", "South-Movie Hindi Dubbed", "Hindi Movies", "http://10.16.100.244/dashboard.php?session=" + s + "&category=32", "http://10.16.100.244", "/dashboard.php?category=32"},
+            {"icc_dual_audio", "Dual Audio", "Hindi Movies", "http://10.16.100.244/dashboard.php?session=" + s + "&category=43", "http://10.16.100.244", "/dashboard.php?category=43"},
+            {"icc_animated", "Animation Movies", "Animation", "http://10.16.100.244/dashboard.php?session=" + s + "&category=33", "http://10.16.100.244", "/dashboard.php?category=33"},
+            {"icc_anime", "Anime Movies", "Animation", "http://10.16.100.244/dashboard.php?session=" + s + "&category=83", "http://10.16.100.244", "/dashboard.php?category=83"},
+            {"icc_serials_anime", "Serials (Anime)", "Animation", "http://10.16.100.244/dashboard.php?session=" + s + "&category=78", "http://10.16.100.244", "/dashboard.php?category=78"},
+            {"icc_foreign", "Other Foreign Movie", "Other Movies", "http://10.16.100.244/dashboard.php?session=" + s + "&category=64", "http://10.16.100.244", "/dashboard.php?category=64"},
+            {"icc_korean", "Korean Movies", "Other Movies", "http://10.16.100.244/dashboard.php?session=" + s + "&category=75", "http://10.16.100.244", "/dashboard.php?category=75"},
+            {"icc_documentary", "Documentaries", "Other Movies", "http://10.16.100.244/dashboard.php?session=" + s + "&category=41", "http://10.16.100.244", "/dashboard.php?category=41"},
+            {"icc_south", "South Indian Movies", "Regional Movies", "http://10.16.100.244/dashboard.php?session=" + s + "&category=73", "http://10.16.100.244", "/dashboard.php?category=73"},
+            {"icc_chinese", "Chinese Movies", "Regional Movies", "http://10.16.100.244/dashboard.php?session=" + s + "&category=76", "http://10.16.100.244", "/dashboard.php?category=76"},
+            {"icc_japanese", "Japanese Movies", "Regional Movies", "http://10.16.100.244/dashboard.php?session=" + s + "&category=80", "http://10.16.100.244", "/dashboard.php?category=80"},
+            {"icc_series_eng", "TV & Web Series (Eng)", "TV & Web Series", "http://10.16.100.244/dashboard.php?session=" + s + "&category=36", "http://10.16.100.244", "/dashboard.php?category=36"},
+            {"icc_series_hindi", "TV & Web Series (Hindi)", "TV & Web Series", "http://10.16.100.244/dashboard.php?session=" + s + "&category=37", "http://10.16.100.244", "/dashboard.php?category=37"},
+            {"icc_series_dual", "TV Series (Dual Audio)", "TV & Web Series", "http://10.16.100.244/dashboard.php?session=" + s + "&category=72", "http://10.16.100.244", "/dashboard.php?category=72"},
+            {"icc_wwe", "WWE Wrestling", "TV & Web Series", "http://10.16.100.244/dashboard.php?session=" + s + "&category=52", "http://10.16.100.244", "/dashboard.php?category=52"}
+        };
+    } else {
+        m_roots = {
+            {"english_movies", "English Movies", "English Movies", "http://172.16.50.7/DHAKA-FLIX-7/English%20Movies/", "http://172.16.50.7", "/DHAKA-FLIX-7/English%20Movies/"},
+            {"english_movies_1080p", "English Movies 1080p", "English Movies", "http://172.16.50.14/DHAKA-FLIX-14/English%20Movies%20%281080p%29/", "http://172.16.50.14", "/DHAKA-FLIX-14/English%20Movies%20%281080p%29/"},
+            {"awards_tv_shows", "Awards & TV Shows", "English Movies", "http://172.16.50.10/DHAKA-FLIX-10/Awards%20%26%20TV%20Shows/", "http://172.16.50.10", "/DHAKA-FLIX-10/Awards%20%26%20TV%20Shows/"},
+            {"hindi_movies", "Hindi Movies", "Hindi Movies", "http://172.16.50.14/DHAKA-FLIX-14/Hindi%20Movies/", "http://172.16.50.14", "/DHAKA-FLIX-14/Hindi%20Movies/"},
+            {"south_movies_hindi_dubbed", "South-Movie Hindi Dubbed", "Hindi Movies", "http://172.16.50.14/DHAKA-FLIX-14/SOUTH%20INDIAN%20MOVIES/Hindi%20Dubbed/", "http://172.16.50.14", "/DHAKA-FLIX-14/SOUTH%20INDIAN%20MOVIES/Hindi%20Dubbed/"},
+            {"animation_movies", "Animation Movies", "Animation", "http://172.16.50.14/DHAKA-FLIX-14/Animation%20Movies/", "http://172.16.50.14", "/DHAKA-FLIX-14/Animation%20Movies/"},
+            {"animation_movies_1080p", "Animation Movies 1080p", "Animation", "http://172.16.50.14/DHAKA-FLIX-14/Animation%20Movies%20%281080p%29/", "http://172.16.50.14", "/DHAKA-FLIX-14/Animation%20Movies%20%281080p%29/"},
+            {"foreign_movies", "Foreign Movies", "Other Movies", "http://172.16.50.7/DHAKA-FLIX-7/Foreign%20Language%20Movies/", "http://172.16.50.7", "/DHAKA-FLIX-7/Foreign%20Language%20Movies/"},
+            {"kolkata_bangla_movies", "Kolkata Bangla Movies", "Regional Movies", "http://172.16.50.7/DHAKA-FLIX-7/Kolkata%20Bangla%20Movies/", "http://172.16.50.7", "/DHAKA-FLIX-7/Kolkata%20Bangla%20Movies/"},
+            {"satyajit_ray_films", "Satyajit Ray Films", "Regional Movies", "http://172.16.50.7/DHAKA-FLIX-7/Kolkata%20Bangla%20Movies/Satyajit%20Ray%20Films/", "http://172.16.50.7", "/DHAKA-FLIX-7/Kolkata%20Bangla%20Movies/Satyajit%20Ray%20Films/"},
+            {"documentary", "Documentary", "Other Movies", "http://172.16.50.10/DHAKA-FLIX-10/Documentary/", "http://172.16.50.10", "/DHAKA-FLIX-10/Documentary/"},
+            {"movies_3d", "3D Movies", "Other Movies", "http://172.16.50.7/DHAKA-FLIX-7/3D%20Movies/", "http://172.16.50.7", "/DHAKA-FLIX-7/3D%20Movies/"},
+            {"south_movies", "South Indian Movies", "Regional Movies", "http://172.16.50.14/DHAKA-FLIX-14/SOUTH%20INDIAN%20MOVIES/South%20Movies/", "http://172.16.50.14", "/DHAKA-FLIX-14/SOUTH%20INDIAN%20MOVIES/South%20Movies/"},
+            {"tv_web_series", "TV & Web Series", "TV & Web Series", "http://172.16.50.12/DHAKA-FLIX-12/TV-WEB-Series/", "http://172.16.50.12", "/DHAKA-FLIX-12/TV-WEB-Series/"},
+            {"korean_series", "Korean TV & Web Series", "TV & Web Series", "http://172.16.50.14/DHAKA-FLIX-14/KOREAN%20TV%20%26%20WEB%20Series/", "http://172.16.50.14", "/DHAKA-FLIX-14/KOREAN%20TV%20%26%20WEB%20Series/"},
+            {"cartoon_tv_series", "Cartoon TV Series", "TV & Web Series", "http://172.16.50.10/DHAKA-FLIX-10/Anime%20%26%20Cartoon%20TV%20Series/", "http://172.16.50.10", "/DHAKA-FLIX-10/Anime%20%26%20Cartoon%20TV%20Series/"},
+            {"wwe_aew", "WWE & AEW Wrestling", "TV & Web Series", "http://172.16.50.10/DHAKA-FLIX-10/WWE%20%26%20AEW%20Wrestling/", "http://172.16.50.10", "/DHAKA-FLIX-10/WWE%20%26%20AEW%20Wrestling/"}
+        };
+    }
     endResetModel();
     emit countChanged();
     return true;

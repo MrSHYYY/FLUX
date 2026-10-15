@@ -9,6 +9,7 @@
 #include <QVariant>
 #include <QVariantList>
 #include <QVariantMap>
+#include <QJSValue>
 
 namespace Flux {
 
@@ -24,6 +25,9 @@ class UserStore : public QObject {
     Q_PROPERTY(int revision READ revision NOTIFY historyChanged)
     Q_PROPERTY(QVariantList continueWatching READ continueWatching NOTIFY historyChanged)
     Q_PROPERTY(bool autoplayNext READ autoplayNext WRITE setAutoplayNext NOTIFY autoplayNextChanged)
+    Q_PROPERTY(int activeServer READ activeServer WRITE setActiveServer NOTIFY serverChanged)
+    Q_PROPERTY(QString iccftpUrl READ iccftpUrl WRITE setIccftpUrl NOTIFY serverChanged)
+    Q_PROPERTY(QString iccftpSession READ iccftpSession WRITE setIccftpSession NOTIFY serverChanged)
 
 public:
     explicit UserStore(QObject *parent = nullptr);
@@ -36,6 +40,15 @@ public:
     QVariantList continueWatching() const;
     bool autoplayNext() const;
     void setAutoplayNext(bool enabled);
+
+    // ---- Media Server (1 = Dhaka Flix, 2 = ICC FTP) ----
+    int activeServer() const;
+    void setActiveServer(int server);
+    QString iccftpUrl() const;
+    void setIccftpUrl(const QString &url);
+    QString iccftpSession() const;
+    void setIccftpSession(const QString &session);
+    Q_INVOKABLE void testServerConnection(int server, const QString &customUrl, const QJSValue &callback);
 
     // ---- Settings ----
     Q_INVOKABLE QVariant value(const QString &key, const QVariant &defaultValue = QVariant()) const;
@@ -60,6 +73,7 @@ public:
 signals:
     void historyChanged();
     void autoplayNextChanged();
+    void serverChanged();
 
 private:
     struct HistoryEntry {

@@ -285,6 +285,7 @@ QVariant FolderBrowser::data(const QModelIndex &index, int role) const {
     case RawHrefRole:     return item.rawHref;
     case LibraryNameRole: return item.libraryName;
     case GroupRole:       return item.group;
+    case PosterUrlRole:   return item.posterUrl;
     default:              return QVariant();
     }
 }
@@ -300,6 +301,7 @@ QHash<int, QByteArray> FolderBrowser::roleNames() const {
     roles[RawHrefRole]     = "rawHref";
     roles[LibraryNameRole] = "libraryName";
     roles[GroupRole]       = "group";
+    roles[PosterUrlRole]   = "posterUrl";
     return roles;
 }
 
@@ -322,6 +324,9 @@ bool FolderBrowser::splitUrl(const QString &url, QString &origin, QString &href)
     if (!defaultPort) origin += QStringLiteral(":") + QString::number(port);
 
     href = u.path(QUrl::FullyEncoded);
+    if (u.hasQuery()) {
+        href += QStringLiteral("?") + u.query(QUrl::FullyEncoded);
+    }
     if (href.isEmpty()) href = QStringLiteral("/");
     return true;
 }
@@ -338,6 +343,31 @@ QString FolderBrowser::folderName() const {
 
 QVariantList FolderBrowser::breadcrumbs() const {
     QVariantList list;
+    if (m_href.contains(QLatin1String("player.php"))) {
+        QVariantMap rootCrumb;
+        rootCrumb["name"] = m_libraryName.isEmpty() ? QStringLiteral("TV Shows") : m_libraryName;
+        rootCrumb["url"] = m_origin + QStringLiteral("/");
+        list.append(rootCrumb);
+
+        QVariantMap crumb;
+        crumb["name"] = m_group.isEmpty() ? QStringLiteral("Episodes") : m_group;
+        crumb["url"] = m_origin + m_href;
+        list.append(crumb);
+        return list;
+    }
+    if (m_href.contains(QLatin1String("category="))) {
+        QVariantMap rootCrumb;
+        rootCrumb["name"] = QStringLiteral("Home");
+        rootCrumb["url"] = m_origin + QStringLiteral("/");
+        list.append(rootCrumb);
+
+        QVariantMap crumb;
+        crumb["name"] = m_libraryName.isEmpty() ? QStringLiteral("Category") : m_libraryName;
+        crumb["url"] = m_origin + m_href;
+        list.append(crumb);
+        return list;
+    }
+
     const QStringList segments = m_href.split('/', Qt::SkipEmptyParts);
     QString accumulated;
     for (const QString &seg : segments) {
@@ -360,7 +390,7 @@ void FolderBrowser::open(const QString &folderUrl, const QString &libraryName, c
         FLUX_LOG_WARN("Browser", "open(): invalid folder URL: " + folderUrl);
         return;
     }
-    if (!href.endsWith('/')) href += QLatin1Char('/');
+    if (!href.contains('?') && !href.endsWith('/')) href += QLatin1Char('/');
 
     if (m_active && !m_restoringPreviousLocation && (origin + href) != currentUrl())
         m_navigationHistory.append(currentUrl());
@@ -496,7 +526,145 @@ void FolderBrowser::requestListing(const QString &origin, const QString &href,
 
     QPointer<FolderBrowser> self(this);
 
-    // 1) Preferred: the server's JSON API
+    // Special handling for ICC FTP series/episodes or category listings
+    if (href.contains(QLatin1String("player.php"))) {
+        self->getHtml(origin, href, [self, origin, href, libraryName, group, cacheKey, done](bool ok, const QByteArray &html) {
+            if (!self) return;
+            if (!ok) {
+                done(false, {});
+                return;
+            }
+            QString htmlStr = QString::fromUtf8(html);
+            std::vector<SearchResult> epItems;
+
+            static const QRegularExpression episodeLiRx(
+                QStringLiteral("<li>\\s*<a\\s+[^>]*href=[\"']([^\"']+)[\"'][^>]*download[^>]*>\\s*([^<]*?)\\s*<span[^>]*class=[\"']pull-right[\"'][^>]*>\\s*([^<]*?)\\s*</span>"),
+                QRegularExpression::CaseInsensitiveOption);
+            QRegularExpressionMatchIterator liIt = episodeLiRx.globalMatch(htmlStr);
+            while (liIt.hasNext()) {
+                auto m = liIt.next();
+                QString epUrl = m.captured(1).trimmed();
+                QString epTitle = m.captured(2).trimmed();
+                QString epSize = m.captured(3).trimmed();
+
+                QString filename = QUrl::fromPercentEncoding(QUrl(epUrl).fileName().toUtf8());
+                QString displayName = epTitle;
+                if (!filename.isEmpty() && !displayName.contains(filename)) {
+                    displayName = epTitle + " - " + filename;
+                }
+
+                SearchResult r;
+                r.displayName = displayName;
+                r.parentPath = libraryName.isEmpty() ? QStringLiteral("TV Shows") : libraryName;
+                r.isFolder = false;
+                r.formattedSize = epSize;
+                r.playUrl = epUrl;
+                r.rawHref = epUrl;
+                r.libraryName = libraryName;
+                r.group = group;
+                r.extension = QFileInfo(filename).suffix();
+                epItems.push_back(std::move(r));
+            }
+
+            if (epItems.empty()) {
+                static const QRegularExpression sourceRx(
+                    QStringLiteral("<source\\s+[^>]*src=['\"]([^'\"]+)['\"][^>]*title=['\"]([^'\"]*)['\"]"),
+                    QRegularExpression::CaseInsensitiveOption);
+                QRegularExpressionMatchIterator srcIt = sourceRx.globalMatch(htmlStr);
+                while (srcIt.hasNext()) {
+                    auto m = srcIt.next();
+                    QString epUrl = m.captured(1).trimmed();
+                    QString epTitle = m.captured(2).trimmed();
+                    QString filename = QUrl::fromPercentEncoding(QUrl(epUrl).fileName().toUtf8());
+
+                    SearchResult r;
+                    r.displayName = epTitle.isEmpty() ? filename : (epTitle + " - " + filename);
+                    r.parentPath = libraryName.isEmpty() ? QStringLiteral("TV Shows") : libraryName;
+                    r.isFolder = false;
+                    r.formattedSize = QString();
+                    r.playUrl = epUrl;
+                    r.rawHref = epUrl;
+                    r.libraryName = libraryName;
+                    r.group = group;
+                    r.extension = QFileInfo(filename).suffix();
+                    epItems.push_back(std::move(r));
+                }
+            }
+
+            if (!epItems.empty()) {
+                epItems = postProcess(std::move(epItems));
+                self->storeCache(cacheKey, epItems);
+                done(true, std::move(epItems));
+                return;
+            }
+            done(false, {});
+        });
+        return;
+    }
+
+    if (href.contains(QLatin1String("category=")) || href.contains(QLatin1String("dashboard.php"))) {
+        self->getHtml(origin, href, [self, origin, href, libraryName, group, cacheKey, done](bool ok, const QByteArray &html) {
+            if (!self) return;
+            if (!ok) {
+                done(false, {});
+                return;
+            }
+            QString htmlStr = QString::fromUtf8(html);
+            std::vector<SearchResult> catItems;
+
+            static const QRegularExpression cardRx(
+                QStringLiteral("<a[^>]*href=[\"']([^\"']*play=(\\d+)[^\"']*)[\"'][^>]*>\\s*<img[^>]*src=[\"']([^\"']+)[\"'][^>]*alt=[\"']([^\"']*)[\"']"),
+                QRegularExpression::CaseInsensitiveOption);
+            QRegularExpressionMatchIterator cardIt = cardRx.globalMatch(htmlStr);
+
+            static const QRegularExpression seriesRegex(
+                QStringLiteral("(?:Season|Episode|Completed|S\\d{1,2}E\\d{1,2})"),
+                QRegularExpression::CaseInsensitiveOption);
+
+            while (cardIt.hasNext()) {
+                auto m = cardIt.next();
+                QString itemLink = m.captured(1).trimmed();
+                QString itemId = m.captured(2).trimmed();
+                QString posterRel = m.captured(3).trimmed();
+                QString itemTitle = m.captured(4).trimmed();
+
+                if (itemTitle.isEmpty() || itemId.isEmpty()) continue;
+
+                bool isFolder = seriesRegex.match(itemTitle).hasMatch();
+
+                QString fullPlayUrl = itemLink.startsWith("http://") || itemLink.startsWith("https://")
+                                    ? itemLink
+                                    : (origin + "/" + (itemLink.startsWith('/') ? itemLink.mid(1) : itemLink));
+
+                QString fullPosterUrl = posterRel.startsWith("http://") || posterRel.startsWith("https://")
+                                      ? posterRel
+                                      : (origin + "/" + (posterRel.startsWith('/') ? posterRel.mid(1) : posterRel));
+
+                SearchResult r;
+                r.displayName = itemTitle;
+                r.parentPath = libraryName.isEmpty() ? QStringLiteral("ICC FTP") : libraryName;
+                r.isFolder = isFolder;
+                r.formattedSize = isFolder ? QStringLiteral("Series") : QString();
+                r.playUrl = fullPlayUrl;
+                r.rawHref = fullPlayUrl;
+                r.libraryName = libraryName;
+                r.group = group;
+                r.posterUrl = fullPosterUrl;
+                r.extension = isFolder ? QString() : QStringLiteral("mp4");
+                catItems.push_back(std::move(r));
+            }
+
+            if (!catItems.empty()) {
+                self->storeCache(cacheKey, catItems);
+                done(true, std::move(catItems));
+                return;
+            }
+            done(false, {});
+        });
+        return;
+    }
+
+    // 1) Preferred: the server's JSON API (Dhaka Flix h5ai)
     postApi(origin, href, [self, origin, href, libraryName, group, cacheKey, done](bool ok, const QByteArray &data) {
         if (!self) return;
 

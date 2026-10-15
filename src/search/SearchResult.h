@@ -17,6 +17,7 @@ struct SearchResult {
     QString libraryId;
     QString libraryName;
     QString group;
+    QString posterUrl;      // Direct poster image URL
     int matchScore = 3;     // search relevance: 3 exact, 2 all words, 1 close match (see SearchQuery)
 
     static SearchResult fromJson(const QString &href,
@@ -25,7 +26,8 @@ struct SearchResult {
                                  const QString &serverOrigin,
                                  const QString &libraryId = "",
                                  const QString &libraryName = "",
-                                 const QString &group = "");
+                                 const QString &group = "",
+                                 const QString &posterUrl = "");
 
     static QString formatBytes(qint64 bytes);
 };

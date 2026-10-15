@@ -14,8 +14,8 @@ Item {
     property bool isExpanded: true
     signal selectionChanged()
 
-    // Definition of the 6 logical category groups
-    readonly property var categoryGroups: [
+    // Dhaka Flix (Server 1) groups
+    readonly property var dhakaFlixGroups: [
         {
             title: "English Movies",
             items: [
@@ -64,6 +64,62 @@ Item {
             ]
         }
     ]
+
+    // ICC FTP (Server 2) groups
+    readonly property var iccftpGroups: [
+        {
+            title: "English Movies",
+            items: [
+                { id: "icc_eng_movies", name: "English Movies" },
+                { id: "icc_excl_1080p", name: "Exclusive Full-HD" },
+                { id: "icc_4k", name: "4K Movies" },
+                { id: "icc_3d", name: "3D Movies" }
+            ]
+        },
+        {
+            title: "Hindi Movies",
+            items: [
+                { id: "icc_hindi", name: "Hindi Movies" },
+                { id: "icc_south_dubbed", name: "South Hindi Dubbed" },
+                { id: "icc_dual_audio", name: "Dual Audio" }
+            ]
+        },
+        {
+            title: "Animation",
+            items: [
+                { id: "icc_animated", name: "Animation Movies" },
+                { id: "icc_cartoon_tv", name: "Cartoon TV Series" },
+                { id: "icc_anime", name: "Anime TV Series" }
+            ]
+        },
+        {
+            title: "Other Movies",
+            items: [
+                { id: "icc_tamil", name: "Tamil & Telugu" },
+                { id: "icc_foreign", name: "Foreign Movies" },
+                { id: "icc_doc", name: "Documentary" }
+            ]
+        },
+        {
+            title: "Regional Movies",
+            items: [
+                { id: "icc_kolkata", name: "Kolkata Bangla" },
+                { id: "icc_bangladesh", name: "Bangladesh Bangla" },
+                { id: "icc_malayalam", name: "Malayalam Movies" }
+            ]
+        },
+        {
+            title: "TV & Web Series",
+            items: [
+                { id: "icc_tv_eng", name: "English TV Series" },
+                { id: "icc_tv_hindi", name: "Hindi TV Series" },
+                { id: "icc_korean", name: "Korean TV Series" },
+                { id: "icc_wwe", name: "WWE & AEW" }
+            ]
+        }
+    ]
+
+    readonly property var categoryGroups: (fluxUser && fluxUser.activeServer === 1) ? dhakaFlixGroups : iccftpGroups
 
     readonly property bool groupsOpen: !root.collapsible || root.isExpanded
     readonly property int rowHeight: root.collapsible ? 38 : 44

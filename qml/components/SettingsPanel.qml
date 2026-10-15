@@ -9,6 +9,9 @@ Popup {
 
     property string errorText: ""
     property string targetErrorText: ""
+    property string serverTestStatus: ""
+    property bool serverTesting: false
+    property bool serverTestSuccess: false
 
     readonly property bool atDefaultLocation: !!fluxDownloads
         && fluxDownloads.downloadLocation.toLowerCase() === fluxDownloads.defaultLocation.toLowerCase()
@@ -33,6 +36,12 @@ Popup {
     onAboutToShow: {
         errorText = ""
         targetErrorText = ""
+        serverTestStatus = ""
+        serverTesting = false
+        serverTestSuccess = false
+        if (fluxUser && serverUrlInput) {
+            serverUrlInput.text = fluxUser.iccftpUrl
+        }
     }
 
     Overlay.modal: Rectangle { color: "#B3000000" }
@@ -170,11 +179,225 @@ Popup {
                 width: scroller.width
                 spacing: 0
 
+                // ---- Media Server ----
+                SectionLabel {
+                    text: "MEDIA SERVER"
+                    Layout.leftMargin: 22
+                    Layout.topMargin: 10
+                }
+
+                Rectangle {
+                    Layout.fillWidth: true
+                    Layout.leftMargin: 22
+                    Layout.rightMargin: 22
+                    Layout.topMargin: 10
+                    implicitHeight: serverColumn.implicitHeight + 36
+                    radius: 14
+                    color: Theme.surface
+                    border.width: 1
+                    border.color: Theme.border
+
+                    ColumnLayout {
+                        id: serverColumn
+
+                        anchors.fill: parent
+                        anchors.margins: 18
+                        spacing: 12
+
+                        Text {
+                            text: "Active Media Server"
+                            color: Theme.text
+                            font.pixelSize: 14
+                            font.weight: Font.DemiBold
+                        }
+
+                        // Server choice buttons (Server 1 vs Server 2)
+                        RowLayout {
+                            Layout.fillWidth: true
+                            spacing: 10
+
+                            Rectangle {
+                                id: server1Btn
+                                Layout.fillWidth: true
+                                implicitHeight: 46
+                                radius: 10
+                                color: (fluxUser && fluxUser.activeServer === 1) ? Theme.accent : Theme.bg
+                                border.width: 1
+                                border.color: (fluxUser && fluxUser.activeServer === 1) ? Theme.accent : Theme.border
+
+                                MouseArea {
+                                    anchors.fill: parent
+                                    cursorShape: Qt.PointingHandCursor
+                                    onClicked: {
+                                        if (fluxUser) fluxUser.setActiveServer(1)
+                                        panel.serverTestStatus = ""
+                                    }
+                                }
+
+                                RowLayout {
+                                    anchors.centerIn: parent
+                                    spacing: 8
+                                    FluxIcon {
+                                        name: (fluxUser && fluxUser.activeServer === 1) ? "check" : "folder"
+                                        size: 16
+                                        color: (fluxUser && fluxUser.activeServer === 1) ? "#FFFFFF" : Theme.textDim
+                                    }
+                                    Text {
+                                        text: "Server 1 (Dhaka Flix)"
+                                        color: (fluxUser && fluxUser.activeServer === 1) ? "#FFFFFF" : Theme.text
+                                        font.pixelSize: 13
+                                        font.weight: (fluxUser && fluxUser.activeServer === 1) ? Font.DemiBold : Font.Normal
+                                    }
+                                }
+                            }
+
+                            Rectangle {
+                                id: server2Btn
+                                Layout.fillWidth: true
+                                implicitHeight: 46
+                                radius: 10
+                                color: (fluxUser && fluxUser.activeServer === 2) ? Theme.accent : Theme.bg
+                                border.width: 1
+                                border.color: (fluxUser && fluxUser.activeServer === 2) ? Theme.accent : Theme.border
+
+                                MouseArea {
+                                    anchors.fill: parent
+                                    cursorShape: Qt.PointingHandCursor
+                                    onClicked: {
+                                        if (fluxUser) fluxUser.setActiveServer(2)
+                                        panel.serverTestStatus = ""
+                                    }
+                                }
+
+                                RowLayout {
+                                    anchors.centerIn: parent
+                                    spacing: 8
+                                    FluxIcon {
+                                        name: (fluxUser && fluxUser.activeServer === 2) ? "check" : "folder"
+                                        size: 16
+                                        color: (fluxUser && fluxUser.activeServer === 2) ? "#FFFFFF" : Theme.textDim
+                                    }
+                                    Text {
+                                        text: "Server 2 (ICC FTP)"
+                                        color: (fluxUser && fluxUser.activeServer === 2) ? "#FFFFFF" : Theme.text
+                                        font.pixelSize: 13
+                                        font.weight: (fluxUser && fluxUser.activeServer === 2) ? Font.DemiBold : Font.Normal
+                                    }
+                                }
+                            }
+                        }
+
+                        // Server 2 configuration fields
+                        ColumnLayout {
+                            Layout.fillWidth: true
+                            spacing: 8
+                            visible: fluxUser && fluxUser.activeServer === 2
+
+                            Text {
+                                text: "ICC FTP Server URL & Session"
+                                color: Theme.textDim
+                                font.pixelSize: 12
+                                font.weight: Font.Medium
+                            }
+
+                            Rectangle {
+                                Layout.fillWidth: true
+                                implicitHeight: 40
+                                radius: 10
+                                color: Theme.bg
+                                border.width: 1
+                                border.color: serverUrlInput.activeFocus ? Theme.accent : Theme.border
+
+                                TextInput {
+                                    id: serverUrlInput
+                                    anchors.fill: parent
+                                    anchors.leftMargin: 12
+                                    anchors.rightMargin: 12
+                                    verticalAlignment: TextInput.AlignVCenter
+                                    text: fluxUser ? fluxUser.iccftpUrl : ""
+                                    color: Theme.text
+                                    font.pixelSize: 12
+                                    font.family: Theme.monoFamily
+                                    selectByMouse: true
+                                    clip: true
+                                    onEditingFinished: {
+                                        if (fluxUser && text.trim().length > 0) {
+                                            fluxUser.setIccftpUrl(text.trim())
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
+                        // Test & Save actions
+                        RowLayout {
+                            Layout.fillWidth: true
+                            spacing: 8
+
+                            FluxButton {
+                                text: panel.serverTesting ? "Testing\u2026" : "Test Connection"
+                                iconName: "refresh"
+                                iconSize: 16
+                                implicitHeight: 36
+                                enabled: !panel.serverTesting
+                                onClicked: {
+                                    if (!fluxUser) return
+                                    panel.serverTesting = true
+                                    panel.serverTestStatus = "Checking server connectivity..."
+                                    var srv = fluxUser.activeServer
+                                    var customUrl = (srv === 2) ? serverUrlInput.text.trim() : ""
+                                    fluxUser.testServerConnection(srv, customUrl, function(ok, msg) {
+                                        panel.serverTesting = false
+                                        panel.serverTestSuccess = ok
+                                        panel.serverTestStatus = ok ? ("Connected successfully! (" + (srv === 2 ? "ICC FTP" : "Dhaka Flix") + ")")
+                                                                    : ("Connection failed: " + msg)
+                                    })
+                                }
+                            }
+
+                            FluxButton {
+                                text: "Apply URL"
+                                variant: "secondary"
+                                implicitHeight: 36
+                                visible: fluxUser && fluxUser.activeServer === 2
+                                onClicked: {
+                                    if (fluxUser && serverUrlInput.text.trim().length > 0) {
+                                        fluxUser.setIccftpUrl(serverUrlInput.text.trim())
+                                        panel.serverTestStatus = "Server settings applied."
+                                        panel.serverTestSuccess = true
+                                    }
+                                }
+                            }
+
+                            Item { Layout.fillWidth: true }
+                        }
+
+                        Text {
+                            Layout.fillWidth: true
+                            visible: panel.serverTestStatus.length > 0
+                            text: panel.serverTestStatus
+                            color: panel.serverTestSuccess ? Theme.success : Theme.danger
+                            font.pixelSize: 12
+                            wrapMode: Text.Wrap
+                        }
+
+                        Text {
+                            Layout.fillWidth: true
+                            text: fluxUser && fluxUser.activeServer === 2
+                                  ? "Server 2 streams directly from ICC FTP nodes with instant video lookup and poster artwork."
+                                  : "Server 1 connects to Dhaka Flix BDIX indexer using h5ai directory search."
+                            color: Theme.textMute
+                            font.pixelSize: 12
+                            wrapMode: Text.Wrap
+                        }
+                    }
+                }
+
                 // ---- Downloads ----
                 SectionLabel {
                     text: "DOWNLOADS"
                     Layout.leftMargin: 22
-                    Layout.topMargin: 10
+                    Layout.topMargin: 20
                 }
 
                 Rectangle {

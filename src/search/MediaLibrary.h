@@ -43,6 +43,8 @@ public:
 
     bool loadDefault();
     bool loadFromFile(const QString &path);
+    bool loadServer(int serverType, const QString &session = QString());
+    int serverType() const { return m_serverType; }
 
     const std::vector<MediaRoot>& roots() const { return m_roots; }
     const MediaRoot* rootAt(int index) const;
@@ -56,6 +58,7 @@ signals:
 
 private:
     std::vector<MediaRoot> m_roots;
+    int m_serverType = 1;
 };
 
 } // namespace Flux

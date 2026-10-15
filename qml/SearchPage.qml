@@ -25,8 +25,19 @@ Item {
     // Downloads: a single file goes to Individuals, a folder (pack) goes to Series
     function startDownload(url, title, isPack) {
         if (!fluxDownloads) return
-        if (isPack) fluxDownloads.downloadPack(url, title)
-        else fluxDownloads.downloadFile(url, title)
+        if (isPack) {
+            fluxDownloads.downloadPack(url, title)
+        } else if (url && url.indexOf("player.php") !== -1 && fluxSearch) {
+            fluxSearch.resolvePlayUrl(url, function(directUrl) {
+                if (directUrl && directUrl.length > 0) {
+                    fluxDownloads.downloadFile(directUrl, title)
+                } else {
+                    fluxDownloads.downloadFile(url, title)
+                }
+            })
+        } else {
+            fluxDownloads.downloadFile(url, title)
+        }
     }
 
     readonly property bool hasSearched: (!!fluxSearch && (fluxSearch.hasResults || fluxSearch.isSearching || fluxSearch.query.length > 0))
@@ -623,6 +634,7 @@ Item {
                 extension: model.extension
                 playUrl: model.playUrl
                 libraryName: model.libraryName
+                posterUrl: model.posterUrl || ""
                 isPlaying: (!!fluxPlayer && fluxPlayer.url === model.playUrl && fluxPlayer.isPlaying)
                 progress: (prog.fraction !== undefined) ? prog.fraction : 0
                 watched: (prog.watched === true)
@@ -766,6 +778,7 @@ Item {
                 playUrl: model.playUrl
                 localPath: model.localPath || ""
                 libraryName: model.libraryName
+                posterUrl: model.posterUrl || ""
                 isPlaying: (!!fluxPlayer && fluxPlayer.url === model.playUrl && fluxPlayer.isPlaying)
                 progress: (prog.fraction !== undefined) ? prog.fraction : 0
                 watched: (prog.watched === true)
@@ -1005,6 +1018,7 @@ Item {
                 extension: model.extension
                 playUrl: model.playUrl
                 libraryName: model.libraryName
+                posterUrl: model.posterUrl || ""
                 isPlaying: (!!fluxPlayer && fluxPlayer.url === model.playUrl && fluxPlayer.isPlaying)
                 progress: (prog.fraction !== undefined) ? prog.fraction : 0
                 watched: (prog.watched === true)

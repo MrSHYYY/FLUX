@@ -165,6 +165,9 @@ if(WIN32)
                 "${CMAKE_CURRENT_SOURCE_DIR}/resources/media_library.json"
                 "$<TARGET_FILE_DIR:FLUX>/resources/media_library.json"
             COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                "${CMAKE_CURRENT_SOURCE_DIR}/resources/icc_library.json"
+                "$<TARGET_FILE_DIR:FLUX>/resources/icc_library.json"
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different
                 "${CMAKE_CURRENT_SOURCE_DIR}/resources/flux.ico"
                 "$<TARGET_FILE_DIR:FLUX>/resources/flux.ico"
             COMMENT "Copying runtime assets and libVLC binaries to build output directory"
@@ -189,6 +192,7 @@ add_executable(flux_test_search
 target_link_libraries(flux_test_search PRIVATE
     Qt6::Core
     Qt6::Network
+    Qt6::Qml
 )
 
 # Standalone CLI test for category switching and stale-result prevention
@@ -208,6 +212,7 @@ add_executable(flux_test_category_switch
 target_link_libraries(flux_test_category_switch PRIVATE
     Qt6::Core
     Qt6::Network
+    Qt6::Qml
 )
 
 # Standalone checks for the forgiving search logic (query variants, scoring, typos)

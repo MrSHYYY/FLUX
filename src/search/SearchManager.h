@@ -5,6 +5,8 @@
 #include <QNetworkReply>
 #include <QString>
 #include <QList>
+#include <QHash>
+#include <QJSValue>
 #include <memory>
 #include <vector>
 #include "SearchResult.h"
@@ -22,6 +24,11 @@ class SearchManager : public QAbstractListModel {
     Q_PROPERTY(QString selectedLibraryName READ selectedLibraryName NOTIFY selectedLibraryChanged)
     Q_PROPERTY(QString selectedLibraryGroup READ selectedLibraryGroup NOTIFY selectedLibraryChanged)
     Q_PROPERTY(QString selectedLibraryUrl READ selectedLibraryUrl NOTIFY selectedLibraryChanged)
+
+    // Multi-server properties (1 = Dhaka Flix, 2 = ICC FTP)
+    Q_PROPERTY(int activeServer READ activeServer WRITE setActiveServer NOTIFY activeServerChanged)
+    Q_PROPERTY(QString iccftpUrl READ iccftpUrl WRITE setIccftpUrl NOTIFY iccftpSettingsChanged)
+    Q_PROPERTY(QString iccftpSession READ iccftpSession WRITE setIccftpSession NOTIFY iccftpSettingsChanged)
 
     // Multi-category / Filter properties
     Q_PROPERTY(bool isAllSelected READ isAllSelected WRITE setAllSelected NOTIFY selectedLibrariesChanged)
@@ -48,7 +55,8 @@ public:
         ExtensionRole,
         RawHrefRole,
         LibraryNameRole,
-        GroupRole
+        GroupRole,
+        PosterUrlRole
     };
 
     explicit SearchManager(QObject *parent = nullptr);
@@ -83,6 +91,15 @@ public:
     bool hasError() const { return !m_errorMessage.isEmpty(); }
     QString statusMessage() const { return m_statusMessage; }
 
+    // Server properties & methods
+    int activeServer() const { return m_activeServer; }
+    void setActiveServer(int server);
+    QString iccftpUrl() const { return m_iccUrl; }
+    void setIccftpUrl(const QString &url);
+    QString iccftpSession() const { return m_iccSession; }
+    void setIccftpSession(const QString &session);
+    Q_INVOKABLE void resolvePlayUrl(const QString &url, const QJSValue &callback);
+
     // QML-invokable methods
     Q_INVOKABLE void selectLibrary(int index);
     Q_INVOKABLE void selectLibraryById(const QString &id);
@@ -104,6 +121,8 @@ public:
     Q_INVOKABLE QVariantMap getResult(int index) const;
 
 signals:
+    void activeServerChanged();
+    void iccftpSettingsChanged();
     void selectedLibraryChanged();
     void selectedLibrariesChanged();
     void queryChanged();
@@ -120,11 +139,18 @@ private:
     // Two-stage search (see SearchQuery): stage 1 sends the literal queries; if that finds few
     // results, stage 2 sends short "anchor" chunks and keeps only candidates that score well.
     void startStage(quint64 searchId, const QStringList &queries);
+    void startIccSearch(quint64 searchId, const QString &query);
+    void resolveDirectUrl(const QString &playUrl, int resultIndex);
     void onReplyFinished(QNetworkReply *reply, quint64 searchId, const MediaRoot &root, int stage);
     void finishSearch(quint64 searchId);
 
     std::unique_ptr<MediaLibraryModel> m_libraryModel;
     int m_selectedLibraryIndex = 0;
+
+    int m_activeServer = 2; // Default to Server 2 (ICC FTP)
+    QString m_iccUrl = QStringLiteral("http://10.16.100.244/dashboard.php?session=b1bdfdae1f7e206b628274ef7eafadcd6094e07c46cd85b157c595174a369f96");
+    QString m_iccSession = QStringLiteral("b1bdfdae1f7e206b628274ef7eafadcd6094e07c46cd85b157c595174a369f96");
+    QHash<QString, QString> m_resolvedUrls;
 
     bool m_isAllSelected = true;
     std::vector<int> m_selectedIndices;

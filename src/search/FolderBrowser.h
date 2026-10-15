@@ -41,7 +41,8 @@ public:
         ExtensionRole,
         RawHrefRole,
         LibraryNameRole,
-        GroupRole
+        GroupRole,
+        PosterUrlRole
     };
 
     explicit FolderBrowser(QObject *parent = nullptr);
