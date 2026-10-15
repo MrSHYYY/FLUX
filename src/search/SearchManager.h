@@ -130,6 +130,7 @@ signals:
     void resultCountChanged();
     void errorMessageChanged();
     void statusMessageChanged();
+    void posterFound(const QString &url, const QString &posterUrl, const QString &title);
 
 private:
     void setSearching(bool searching);

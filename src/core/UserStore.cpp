@@ -71,8 +71,14 @@ UserStore::UserStore(QObject *parent)
     const QFileInfo settingsInfo(m_settings.fileName());
     QDir().mkpath(settingsInfo.absolutePath());
     m_historyPath = settingsInfo.absolutePath() + QStringLiteral("/history.json");
+    m_posterPath = settingsInfo.absolutePath() + QStringLiteral("/posters.json");
 
     loadHistory();
+    loadPosters();
+
+    m_posterSaveTimer.setSingleShot(true);
+    m_posterSaveTimer.setInterval(2000);
+    connect(&m_posterSaveTimer, &QTimer::timeout, this, [this]() { savePosters(); });
 
     m_tickTimer.setInterval(5000);
     connect(&m_tickTimer, &QTimer::timeout, this, [this]() { checkpoint(false); });
@@ -106,6 +112,35 @@ QString UserStore::nameFromUrl(const QString &url) {
     if (decoded.endsWith('/')) decoded.chop(1);
     const int slash = decoded.lastIndexOf('/');
     return slash >= 0 ? decoded.mid(slash + 1) : decoded;
+}
+
+// Identity of an item for poster lookups. ICC FTP addresses carry a session token that changes,
+// so they are matched by their play id only; everything else by its decoded address.
+QString UserStore::posterKey(const QString &url) {
+    if (url.contains(QLatin1String("player.php"))) {
+        static const QRegularExpression playRe(QStringLiteral("[?&]play=(\\d+)"));
+        const QRegularExpressionMatch m = playRe.match(url);
+        if (m.hasMatch()) return QStringLiteral("icc:") + m.captured(1);
+    }
+    QString key = QUrl::fromPercentEncoding(url.trimmed().toUtf8());
+    while (key.endsWith(QLatin1Char('/'))) key.chop(1);
+    return key.toCaseFolded();
+}
+
+QString UserStore::titleKey(const QString &title) {
+    if (title.trimmed().isEmpty()) return QString();
+    QString t = title.trimmed().toCaseFolded();
+    static const QRegularExpression nonAlphanumRx(QStringLiteral("[^a-z0-9]+"));
+    t.replace(nonAlphanumRx, QStringLiteral(" "));
+    t = t.trimmed();
+    return t.isEmpty() ? QString() : (QStringLiteral("title:") + t);
+}
+
+QString UserStore::folderKey(const QString &url) {
+    if (url.trimmed().isEmpty()) return QString();
+    QString key = QUrl::fromPercentEncoding(url.trimmed().toUtf8());
+    while (key.endsWith(QLatin1Char('/'))) key.chop(1);
+    return key.toCaseFolded();
 }
 
 // ----------------------------------------------------------------------------
@@ -202,11 +237,20 @@ void UserStore::noteStart(const QString &url, const QString &title, const QStrin
     HistoryEntry &e = m_history[key];
     e.url = url;
     e.title = nameFromUrl(url);
-    if (e.title.isEmpty()) e.title = title;
+    // Addresses like ".../player.php?play=123" have no readable file name: use the title we were given
+    if (e.title.isEmpty() || ((url.contains(QLatin1String("player.php")) || e.title.contains('?')) && !title.isEmpty())) {
+        e.title = title;
+    }
     e.lastPlayed = QDateTime::currentMSecsSinceEpoch();
 
     m_currentKey = key;
     m_currentPlaybackKey = keyFor(playbackUrl.isEmpty() ? url : playbackUrl);
+    if (!playbackUrl.isEmpty() && playbackUrl != url) {
+        const QString p = posterFor(url, title);
+        if (!p.isEmpty()) {
+            rememberPoster(playbackUrl, p, title);
+        }
+    }
     m_dirty = true;
     scheduleSave();
 
@@ -321,10 +365,11 @@ QVariantList UserStore::continueWatching() const {
     });
 
     QVariantList list;
-    const auto appendEpisode = [&list](const HistoryEntry *e) {
+    const auto appendEpisode = [this, &list](const HistoryEntry *e) {
         QVariantMap m;
         m["url"] = e->url;
         m["title"] = e->title;
+        m["posterUrl"] = posterFor(e->url, e->title);
         m["positionMs"] = e->positionMs;
         m["durationMs"] = e->durationMs;
         m["fraction"] = e->durationMs > 0
@@ -342,9 +387,15 @@ QVariantList UserStore::continueWatching() const {
     for (const QString &key : seriesOrder) {
         if (list.size() >= kMaxContinueEntries) break;
         const SeriesLocation location = locations.value(key);
+        const QString mappedWebFolder = seriesFolderFor(location.url);
         QVariantMap folder;
-        folder["url"] = location.url;
+        folder["url"] = mappedWebFolder.isEmpty() ? location.url : mappedWebFolder;
         folder["title"] = location.title;
+        // The show's poster; failing that, the poster of the episode that was played
+        QString folderPoster = posterFor(folder["url"].toString(), location.title);
+        if (folderPoster.isEmpty()) folderPoster = posterFor(location.url, location.title);
+        if (folderPoster.isEmpty()) folderPoster = posterFor(series.value(key)->url, series.value(key)->title);
+        folder["posterUrl"] = folderPoster;
         folder["positionMs"] = 0;
         folder["durationMs"] = 0;
         folder["fraction"] = 0.0;
@@ -509,6 +560,191 @@ void UserStore::testServerConnection(int server, const QString &customUrl, const
 }
 
 // ----------------------------------------------------------------------------
+// Posters
+// ----------------------------------------------------------------------------
+
+void UserStore::rememberPoster(const QString &url, const QString &posterUrl, const QString &title) {
+    const QString poster = posterUrl.trimmed();
+    if (poster.isEmpty()) return;
+
+    bool updated = false;
+    const qint64 now = QDateTime::currentMSecsSinceEpoch();
+
+    if (!url.trimmed().isEmpty()) {
+        const QString key = posterKey(url);
+        auto it = m_posters.find(key);
+        if (it == m_posters.end() || it->url != poster) {
+            PosterEntry entry;
+            entry.url = poster;
+            entry.usedAt = now;
+            m_posters.insert(key, entry);
+            updated = true;
+        } else {
+            it->usedAt = now;
+        }
+
+        const QString fKey = folderKey(url);
+        if (!fKey.isEmpty() && fKey != key) {
+            m_posters[fKey] = {poster, now};
+            updated = true;
+        }
+    }
+
+    const QString tKey = titleKey(title);
+    if (!tKey.isEmpty()) {
+        auto it = m_posters.find(tKey);
+        if (it == m_posters.end() || it->url != poster) {
+            PosterEntry entry;
+            entry.url = poster;
+            entry.usedAt = now;
+            m_posters.insert(tKey, entry);
+            updated = true;
+        } else {
+            it->usedAt = now;
+        }
+    }
+
+    if (!updated) return;
+
+    // Keep the hash bounded: forget the oldest posters first
+    constexpr int kMaxPosters = 1500;
+    if (m_posters.size() > kMaxPosters) {
+        std::vector<std::pair<qint64, QString>> order;
+        order.reserve(static_cast<size_t>(m_posters.size()));
+        for (auto p = m_posters.constBegin(); p != m_posters.constEnd(); ++p) {
+            order.emplace_back(p.value().usedAt, p.key());
+        }
+        std::sort(order.begin(), order.end());
+        for (size_t i = 0; i < 300 && i < order.size(); ++i) m_posters.remove(order[i].second);
+    }
+
+    m_postersDirty = true;
+    if (!m_posterSaveTimer.isActive()) m_posterSaveTimer.start();
+
+    ++m_posterRevision;
+    emit postersChanged();
+}
+
+QString UserStore::posterFor(const QString &url, const QString &title) const {
+    if (!url.trimmed().isEmpty()) {
+        const auto it = m_posters.constFind(posterKey(url));
+        if (it != m_posters.constEnd() && !it->url.isEmpty()) return it->url;
+
+        const auto fIt = m_posters.constFind(folderKey(url));
+        if (fIt != m_posters.constEnd() && !fIt->url.isEmpty()) return fIt->url;
+
+        const QString mapped = seriesFolderFor(url);
+        if (!mapped.isEmpty() && mapped != url) {
+            const auto mIt = m_posters.constFind(posterKey(mapped));
+            if (mIt != m_posters.constEnd() && !mIt->url.isEmpty()) return mIt->url;
+        }
+    }
+
+    if (!title.trimmed().isEmpty()) {
+        const auto tIt = m_posters.constFind(titleKey(title));
+        if (tIt != m_posters.constEnd() && !tIt->url.isEmpty()) return tIt->url;
+    }
+
+    if (!url.trimmed().isEmpty()) {
+        const QString name = nameFromUrl(url);
+        if (!name.isEmpty() && name != title) {
+            const auto nIt = m_posters.constFind(titleKey(name));
+            if (nIt != m_posters.constEnd() && !nIt->url.isEmpty()) return nIt->url;
+        }
+    }
+
+    return QString();
+}
+
+void UserStore::mapSeriesFolder(const QString &mediaFolderUrl, const QString &webFolderUrl) {
+    if (mediaFolderUrl.trimmed().isEmpty() || webFolderUrl.trimmed().isEmpty()) return;
+    const QString k = folderKey(mediaFolderUrl);
+    if (k.isEmpty()) return;
+    if (m_seriesFolders.value(k) == webFolderUrl) return;
+
+    m_seriesFolders.insert(k, webFolderUrl);
+    m_postersDirty = true;
+    if (!m_posterSaveTimer.isActive()) m_posterSaveTimer.start();
+}
+
+QString UserStore::seriesFolderFor(const QString &mediaFolderUrl) const {
+    if (mediaFolderUrl.trimmed().isEmpty()) return QString();
+    return m_seriesFolders.value(folderKey(mediaFolderUrl));
+}
+
+void UserStore::loadPosters() {
+    QFile file(m_posterPath);
+    if (!file.exists() || !file.open(QIODevice::ReadOnly)) return;
+
+    const QJsonDocument doc = QJsonDocument::fromJson(file.readAll());
+    if (doc.isArray()) {
+        for (const QJsonValue &v : doc.array()) {
+            const QJsonObject o = v.toObject();
+            const QString key = o.value("k").toString();
+            const QString url = o.value("u").toString();
+            if (key.isEmpty() || url.isEmpty()) continue;
+            PosterEntry e;
+            e.url = url;
+            e.usedAt = static_cast<qint64>(o.value("t").toDouble());
+            m_posters.insert(key, e);
+        }
+    } else if (doc.isObject()) {
+        const QJsonObject rootObj = doc.object();
+        for (const QJsonValue &v : rootObj.value("posters").toArray()) {
+            const QJsonObject o = v.toObject();
+            const QString key = o.value("k").toString();
+            const QString url = o.value("u").toString();
+            if (key.isEmpty() || url.isEmpty()) continue;
+            PosterEntry e;
+            e.url = url;
+            e.usedAt = static_cast<qint64>(o.value("t").toDouble());
+            m_posters.insert(key, e);
+        }
+        for (const QJsonValue &v : rootObj.value("seriesFolders").toArray()) {
+            const QJsonObject o = v.toObject();
+            const QString m = o.value("m").toString();
+            const QString w = o.value("w").toString();
+            if (!m.isEmpty() && !w.isEmpty()) {
+                m_seriesFolders.insert(m, w);
+            }
+        }
+    }
+}
+
+void UserStore::savePosters() {
+    if (!m_postersDirty) return;
+
+    QJsonObject rootObj;
+
+    QJsonArray posterArr;
+    for (auto it = m_posters.constBegin(); it != m_posters.constEnd(); ++it) {
+        QJsonObject o;
+        o["k"] = it.key();
+        o["u"] = it.value().url;
+        o["t"] = static_cast<double>(it.value().usedAt);
+        posterArr.append(o);
+    }
+    rootObj["posters"] = posterArr;
+
+    QJsonArray folderArr;
+    for (auto it = m_seriesFolders.constBegin(); it != m_seriesFolders.constEnd(); ++it) {
+        QJsonObject o;
+        o["m"] = it.key();
+        o["w"] = it.value();
+        folderArr.append(o);
+    }
+    rootObj["seriesFolders"] = folderArr;
+
+    QSaveFile file(m_posterPath);
+    if (!file.open(QIODevice::WriteOnly)) {
+        FLUX_LOG_WARN("UserStore", "Could not write posters file: " + m_posterPath);
+        return;
+    }
+    file.write(QJsonDocument(rootObj).toJson(QJsonDocument::Compact));
+    if (file.commit()) m_postersDirty = false;
+}
+
+// ----------------------------------------------------------------------------
 // Persistence
 // ----------------------------------------------------------------------------
 
@@ -595,6 +831,8 @@ void UserStore::shutdown() {
     m_tickTimer.stop();
     checkpoint(false);
     writeHistory();
+    m_posterSaveTimer.stop();
+    savePosters();
     m_settings.sync();
 }
 

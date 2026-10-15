@@ -1,12 +1,15 @@
 #pragma once
 
 #include <QAbstractListModel>
+#include <QNetworkAccessManager>
 #include <QSet>
 #include <QString>
 #include <QTimer>
 #include <vector>
 
 namespace Flux {
+
+class UserStore;
 
 // Bookmarked files and folders.
 //
@@ -32,7 +35,8 @@ public:
         LibraryNameRole,
         GroupRole,
         LocalPathRole,
-        IsLocalRole
+        IsLocalRole,
+        PosterUrlRole
     };
 
     explicit BookmarkManager(QObject *parent = nullptr);
@@ -51,9 +55,12 @@ public:
     // bookmarked afterwards.
     Q_INVOKABLE bool toggle(const QString &url, const QString &title, bool isFolder,
                             const QString &formattedSize, const QString &extension,
-                            const QString &libraryName, const QString &parentPath);
+                            const QString &libraryName, const QString &parentPath,
+                            const QString &posterUrl = QString());
     Q_INVOKABLE void remove(const QString &url);
     Q_INVOKABLE void clear();
+
+    void setUserStore(UserStore *store);
 
     // Write pending changes to disk now (called on shutdown)
     Q_INVOKABLE void flush();
@@ -72,6 +79,7 @@ private:
         QString libraryName;
         QString group;
         QString rawHref;
+        QString posterUrl;      // banner image (ICC FTP), so it survives closing the app
         bool isFolder = false;
         qint64 addedAt = 0;
     };
@@ -81,6 +89,10 @@ private:
     void load();
     void save();
     void changed();
+    void resolveMissingPosters();
+
+    UserStore *m_userStore = nullptr;
+    QNetworkAccessManager m_network;
 
     std::vector<Entry> m_entries;   // newest first
     QSet<QString> m_keys;           // normalised URLs, for O(1) isBookmarked()

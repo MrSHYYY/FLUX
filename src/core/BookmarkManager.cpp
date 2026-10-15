@@ -1,5 +1,6 @@
 #include "BookmarkManager.h"
 #include "Logger.h"
+#include "UserStore.h"
 
 #include <QDateTime>
 #include <QDir>
@@ -8,6 +9,9 @@
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
+#include <QNetworkRequest>
+#include <QNetworkReply>
+#include <QRegularExpression>
 #include <QSaveFile>
 #include <QSettings>
 #include <QUrl>
@@ -62,6 +66,14 @@ QVariant BookmarkManager::data(const QModelIndex &index, int role) const {
     case RawHrefRole:     return e.rawHref;
     case LibraryNameRole: return e.libraryName;
     case GroupRole:       return e.group;
+    case PosterUrlRole: {
+        if (!e.posterUrl.isEmpty()) return e.posterUrl;
+        if (m_userStore) {
+            const QString p = m_userStore->posterFor(e.url, e.title);
+            if (!p.isEmpty()) return p;
+        }
+        return QString();
+    }
     case LocalPathRole: {
         if (e.url.startsWith(QStringLiteral("file:"), Qt::CaseInsensitive)) {
             QString lp = QUrl(e.url).toLocalFile();
@@ -99,6 +111,7 @@ QHash<int, QByteArray> BookmarkManager::roleNames() const {
     roles[GroupRole]       = "group";
     roles[LocalPathRole]   = "localPath";
     roles[IsLocalRole]     = "isLocal";
+    roles[PosterUrlRole]   = "posterUrl";
     return roles;
 }
 
@@ -118,13 +131,19 @@ bool BookmarkManager::isBookmarked(const QString &url) const {
 
 bool BookmarkManager::toggle(const QString &url, const QString &title, bool isFolder,
                              const QString &formattedSize, const QString &extension,
-                             const QString &libraryName, const QString &parentPath) {
+                             const QString &libraryName, const QString &parentPath,
+                             const QString &posterUrl) {
     const QString key = keyFor(url);
     if (key.isEmpty()) return false;
 
     if (m_keys.contains(key)) {
         remove(url);
         return false;
+    }
+
+    QString poster = posterUrl.trimmed();
+    if (poster.isEmpty() && m_userStore) {
+        poster = m_userStore->posterFor(url, title);
     }
 
     Entry e;
@@ -135,6 +154,7 @@ bool BookmarkManager::toggle(const QString &url, const QString &title, bool isFo
     e.extension = extension;
     e.libraryName = libraryName;
     e.isFolder = isFolder;
+    e.posterUrl = poster;
     e.rawHref = QUrl(url, QUrl::TolerantMode).path(QUrl::FullyEncoded);
     e.addedAt = QDateTime::currentMSecsSinceEpoch();
 
@@ -145,7 +165,79 @@ bool BookmarkManager::toggle(const QString &url, const QString &title, bool isFo
     m_keys.insert(key);
     changed();
     FLUX_LOG_INFO("Bookmarks", "Bookmarked: " + title);
+
+    if (poster.isEmpty()) {
+        resolveMissingPosters();
+    }
     return true;
+}
+
+void BookmarkManager::setUserStore(UserStore *store) {
+    m_userStore = store;
+    resolveMissingPosters();
+}
+
+void BookmarkManager::resolveMissingPosters() {
+    for (size_t i = 0; i < m_entries.size(); ++i) {
+        Entry &e = m_entries[i];
+        if (e.posterUrl.isEmpty() && m_userStore) {
+            const QString p = m_userStore->posterFor(e.url, e.title);
+            if (!p.isEmpty()) {
+                e.posterUrl = p;
+                m_dirty = true;
+                QModelIndex idx = index(static_cast<int>(i), 0);
+                emit dataChanged(idx, idx, {PosterUrlRole});
+            }
+        }
+
+        if (e.posterUrl.isEmpty() && e.url.contains(QLatin1String("player.php"))) {
+            const QString itemUrl = e.url;
+            QNetworkRequest req{QUrl(itemUrl, QUrl::TolerantMode)};
+            req.setAttribute(QNetworkRequest::RedirectPolicyAttribute, QNetworkRequest::NoLessSafeRedirectPolicy);
+            req.setTransferTimeout(8000);
+            QNetworkReply *reply = m_network.get(req);
+            connect(reply, &QNetworkReply::finished, this, [this, reply, itemUrl]() {
+                reply->deleteLater();
+                if (reply->error() != QNetworkReply::NoError) return;
+                const QString html = QString::fromUtf8(reply->readAll());
+                QString pagePosterUrl;
+                static const QRegularExpression posterImgRx(
+                    QStringLiteral("<img[^>]+src=[\"'](files/[^\"']+)[\"']"),
+                    QRegularExpression::CaseInsensitiveOption);
+                QRegularExpressionMatch pMatch = posterImgRx.match(html);
+                QUrl base(itemUrl);
+                if (pMatch.hasMatch()) {
+                    QString rel = pMatch.captured(1).trimmed();
+                    if (!rel.startsWith('/')) rel.prepend('/');
+                    pagePosterUrl = base.scheme() + QStringLiteral("://") + base.authority() + rel;
+                } else {
+                    static const QRegularExpression posterScriptRx(
+                        QStringLiteral("poster(?:Image)?['\"]?\\s*:\\s*['\"](files/[^'\"]+)['\"]"),
+                        QRegularExpression::CaseInsensitiveOption);
+                    QRegularExpressionMatch pScriptMatch = posterScriptRx.match(html);
+                    if (pScriptMatch.hasMatch()) {
+                        QString rel = pScriptMatch.captured(1).trimmed();
+                        if (!rel.startsWith('/')) rel.prepend('/');
+                        pagePosterUrl = base.scheme() + QStringLiteral("://") + base.authority() + rel;
+                    }
+                }
+                if (!pagePosterUrl.isEmpty()) {
+                    for (size_t idx = 0; idx < m_entries.size(); ++idx) {
+                        if (m_entries[idx].url == itemUrl) {
+                            m_entries[idx].posterUrl = pagePosterUrl;
+                            m_dirty = true;
+                            if (m_userStore) m_userStore->rememberPoster(itemUrl, pagePosterUrl, m_entries[idx].title);
+                            QModelIndex mi = index(static_cast<int>(idx), 0);
+                            emit dataChanged(mi, mi, {PosterUrlRole});
+                            break;
+                        }
+                    }
+                    if (!m_saveTimer.isActive()) m_saveTimer.start();
+                }
+            });
+        }
+    }
+    if (m_dirty && !m_saveTimer.isActive()) m_saveTimer.start();
 }
 
 void BookmarkManager::remove(const QString &url) {
@@ -211,6 +303,7 @@ void BookmarkManager::load() {
         e.libraryName = o.value("libraryName").toString();
         e.group = o.value("group").toString();
         e.rawHref = o.value("rawHref").toString();
+        e.posterUrl = o.value("posterUrl").toString();
         e.isFolder = o.value("isFolder").toBool();
         e.addedAt = static_cast<qint64>(o.value("addedAt").toDouble());
 
@@ -233,6 +326,7 @@ void BookmarkManager::save() {
         o["libraryName"] = e.libraryName;
         o["group"] = e.group;
         o["rawHref"] = e.rawHref;
+        o["posterUrl"] = e.posterUrl;
         o["isFolder"] = e.isFolder;
         o["addedAt"] = static_cast<double>(e.addedAt);
         arr.append(o);

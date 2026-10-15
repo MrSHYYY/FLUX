@@ -83,6 +83,8 @@ signals:
     void locationChanged();
     void itemCountChanged();
     void nextChanged();
+    void posterFound(const QString &url, const QString &posterUrl, const QString &title);
+    void seriesMappingFound(const QString &mediaFolderUrl, const QString &webFolderUrl, const QString &posterUrl, const QString &title);
 
 private:
     using ListingCallback = std::function<void(bool ok, std::vector<SearchResult> items)>;

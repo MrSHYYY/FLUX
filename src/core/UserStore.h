@@ -28,6 +28,8 @@ class UserStore : public QObject {
     Q_PROPERTY(int activeServer READ activeServer WRITE setActiveServer NOTIFY serverChanged)
     Q_PROPERTY(QString iccftpUrl READ iccftpUrl WRITE setIccftpUrl NOTIFY serverChanged)
     Q_PROPERTY(QString iccftpSession READ iccftpSession WRITE setIccftpSession NOTIFY serverChanged)
+    // Bumps when a poster is remembered; QML bindings read it to pick up new posters
+    Q_PROPERTY(int posterRevision READ posterRevision NOTIFY postersChanged)
 
 public:
     explicit UserStore(QObject *parent = nullptr);
@@ -50,6 +52,15 @@ public:
     QString iccftpSession() const;
     Q_INVOKABLE void setIccftpSession(const QString &session);
     Q_INVOKABLE void testServerConnection(int server, const QString &customUrl, const QJSValue &callback);
+
+    // ---- Posters (banners from ICC FTP) ----
+    // Remembered per item so Bookmarks and Continue Watching can show the same artwork as search
+    // results. Items are matched by their play id / address, not by the session token in the URL.
+    int posterRevision() const { return m_posterRevision; }
+    Q_INVOKABLE void rememberPoster(const QString &url, const QString &posterUrl, const QString &title = QString());
+    Q_INVOKABLE QString posterFor(const QString &url, const QString &title = QString()) const;
+    Q_INVOKABLE void mapSeriesFolder(const QString &mediaFolderUrl, const QString &webFolderUrl);
+    Q_INVOKABLE QString seriesFolderFor(const QString &mediaFolderUrl) const;
 
     // ---- Settings ----
     Q_INVOKABLE QVariant value(const QString &key, const QVariant &defaultValue = QVariant()) const;
@@ -75,6 +86,7 @@ signals:
     void historyChanged();
     void autoplayNextChanged();
     void serverChanged();
+    void postersChanged();
 
 private:
     struct HistoryEntry {
@@ -88,6 +100,12 @@ private:
 
     static QString keyFor(const QString &url);
     static QString nameFromUrl(const QString &url);
+    static QString posterKey(const QString &url);
+    static QString titleKey(const QString &title);
+    static QString folderKey(const QString &url);
+
+    void loadPosters();
+    void savePosters();
 
     void loadHistory();
     void scheduleSave();
@@ -97,6 +115,17 @@ private:
 
     QSettings m_settings;
     QString m_historyPath;
+
+    struct PosterEntry {
+        QString url;
+        qint64 usedAt = 0;
+    };
+    QHash<QString, PosterEntry> m_posters;   // posterKey(item url) or titleKey(title) -> poster image url
+    QHash<QString, QString> m_seriesFolders; // folderKey(mediaFolderUrl) -> webFolderUrl
+    QString m_posterPath;
+    QTimer m_posterSaveTimer;
+    int m_posterRevision = 0;
+    bool m_postersDirty = false;
     QHash<QString, HistoryEntry> m_history;
     QString m_currentKey;
     QString m_currentPlaybackKey;

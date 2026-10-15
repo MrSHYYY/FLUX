@@ -290,6 +290,7 @@ Item {
                         height: 176
                         title: modelData.title
                         playUrl: modelData.url
+                        posterUrl: modelData.posterUrl || ""
                         isFolder: modelData.isFolder === true
                         progress: modelData.fraction
                         showRemove: modelData.isFolder !== true

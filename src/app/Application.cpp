@@ -147,6 +147,28 @@ bool Application::initialize(QQmlApplicationEngine &engine) {
             store->setValue("targets/paths", downloads->targets());
         });
 
+        // Bookmarks & Posters
+        m_bookmarks->setUserStore(store);
+
+        connect(search, &SearchManager::posterFound, store,
+                [store](const QString &url, const QString &posterUrl, const QString &title) {
+            store->rememberPoster(url, posterUrl, title);
+        });
+
+        connect(m_folderBrowser.get(), &FolderBrowser::posterFound, store,
+                [store](const QString &url, const QString &posterUrl, const QString &title) {
+            store->rememberPoster(url, posterUrl, title);
+        });
+
+        connect(m_folderBrowser.get(), &FolderBrowser::seriesMappingFound, store,
+                [store](const QString &mediaFolderUrl, const QString &webFolderUrl, const QString &posterUrl, const QString &title) {
+            store->mapSeriesFolder(mediaFolderUrl, webFolderUrl);
+            if (!posterUrl.isEmpty()) {
+                store->rememberPoster(mediaFolderUrl, posterUrl, title);
+                store->rememberPoster(webFolderUrl, posterUrl, title);
+            }
+        });
+
         // Watch progress (resume / continue watching / watched)
         store->attachPlayer(player);
         connect(QCoreApplication::instance(), &QCoreApplication::aboutToQuit, store, &UserStore::shutdown);

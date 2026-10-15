@@ -537,6 +537,34 @@ void FolderBrowser::requestListing(const QString &origin, const QString &href,
             QString htmlStr = QString::fromUtf8(html);
             std::vector<SearchResult> epItems;
 
+            QString pagePosterUrl;
+            static const QRegularExpression posterImgRx(
+                QStringLiteral("<img[^>]+src=[\"'](files/[^\"']+)[\"']"),
+                QRegularExpression::CaseInsensitiveOption);
+            QRegularExpressionMatch pMatch = posterImgRx.match(htmlStr);
+            if (pMatch.hasMatch()) {
+                QString rel = pMatch.captured(1).trimmed();
+                if (!rel.startsWith('/')) rel.prepend('/');
+                pagePosterUrl = origin + rel;
+            } else {
+                static const QRegularExpression posterScriptRx(
+                    QStringLiteral("poster(?:Image)?['\"]?\\s*:\\s*['\"](files/[^'\"]+)['\"]"),
+                    QRegularExpression::CaseInsensitiveOption);
+                QRegularExpressionMatch pScriptMatch = posterScriptRx.match(htmlStr);
+                if (pScriptMatch.hasMatch()) {
+                    QString rel = pScriptMatch.captured(1).trimmed();
+                    if (!rel.startsWith('/')) rel.prepend('/');
+                    pagePosterUrl = origin + rel;
+                }
+            }
+
+            QString showTitle = group;
+            if (showTitle.isEmpty()) {
+                static const QRegularExpression titleRx(QStringLiteral("<h[234][^>]*>(.*?)</h[234]>"), QRegularExpression::CaseInsensitiveOption);
+                QRegularExpressionMatch tMatch = titleRx.match(htmlStr);
+                if (tMatch.hasMatch()) showTitle = tMatch.captured(1).trimmed();
+            }
+
             static const QRegularExpression episodeLiRx(
                 QStringLiteral("<li>\\s*<a\\s+[^>]*href=[\"']([^\"']+)[\"'][^>]*download[^>]*>\\s*([^<]*?)\\s*<span[^>]*class=[\"']pull-right[\"'][^>]*>\\s*([^<]*?)\\s*</span>"),
                 QRegularExpression::CaseInsensitiveOption);
@@ -562,6 +590,7 @@ void FolderBrowser::requestListing(const QString &origin, const QString &href,
                 r.rawHref = epUrl;
                 r.libraryName = libraryName;
                 r.group = group;
+                r.posterUrl = pagePosterUrl;
                 r.extension = QFileInfo(filename).suffix();
                 epItems.push_back(std::move(r));
             }
@@ -586,12 +615,34 @@ void FolderBrowser::requestListing(const QString &origin, const QString &href,
                     r.rawHref = epUrl;
                     r.libraryName = libraryName;
                     r.group = group;
+                    r.posterUrl = pagePosterUrl;
                     r.extension = QFileInfo(filename).suffix();
                     epItems.push_back(std::move(r));
                 }
             }
 
             if (!epItems.empty()) {
+                const QString webFolderUrl = origin + href;
+                if (!pagePosterUrl.isEmpty()) {
+                    emit self->posterFound(webFolderUrl, pagePosterUrl, showTitle);
+                }
+
+                const QString firstEp = epItems.front().playUrl;
+                QUrl u(firstEp);
+                const QString epPath = u.path();
+                const int ls = epPath.lastIndexOf('/');
+                if (ls > 0) {
+                    u.setPath(epPath.left(ls + 1));
+                    const QString mediaFolderUrl = u.toString(QUrl::FullyEncoded);
+                    emit self->seriesMappingFound(mediaFolderUrl, webFolderUrl, pagePosterUrl, showTitle);
+                }
+
+                for (const auto &item : epItems) {
+                    if (!item.playUrl.isEmpty() && !pagePosterUrl.isEmpty()) {
+                        emit self->posterFound(item.playUrl, pagePosterUrl, item.displayName);
+                    }
+                }
+
                 epItems = postProcess(std::move(epItems));
                 self->storeCache(cacheKey, epItems);
                 done(true, std::move(epItems));

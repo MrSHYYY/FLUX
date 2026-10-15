@@ -75,6 +75,13 @@ Item {
     readonly property string posterTop: Theme.posterTop(root.title)
     readonly property string posterBottom: Theme.posterBottom(root.title)
 
+    // Resolved poster URL: explicit posterUrl > remembered poster by URL or title
+    readonly property string effectivePosterUrl: {
+        if (root.posterUrl && root.posterUrl.length > 0) return root.posterUrl
+        var rev = fluxUser ? fluxUser.posterRevision : 0
+        return fluxUser ? fluxUser.posterFor(root.playUrl, root.title) : ""
+    }
+
     // Big outlined mark on the poster: episode number > year > first letter
     readonly property string bigText: {
         if (root.isFolder) return ""
@@ -175,8 +182,8 @@ Item {
         Image {
             id: posterImage
             anchors.fill: parent
-            visible: root.posterUrl.length > 0 && status === Image.Ready
-            source: root.posterUrl
+            visible: root.effectivePosterUrl.length > 0 && status === Image.Ready
+            source: root.effectivePosterUrl
             fillMode: Image.PreserveAspectCrop
             asynchronous: true
             cache: true
@@ -484,7 +491,16 @@ Item {
     }
 
     // ---- Actions shared by a left click and the right-click menu -------------------------
+    // Remember this item's banner so Bookmarks / Continue Watching can show it later
+    function rememberPoster() {
+        var poster = root.effectivePosterUrl.length > 0 ? root.effectivePosterUrl : root.posterUrl
+        if (fluxUser && poster.length > 0 && root.playUrl.length > 0) {
+            fluxUser.rememberPoster(root.playUrl, poster, root.title)
+        }
+    }
+
     function activate() {
+        rememberPoster()
         if (root.isFolder) {
             if (root.playUrl.length > 0) root.folderRequested(root.playUrl, root.libraryName)
         } else if (root.playUrl.length > 0) {
@@ -494,8 +510,10 @@ Item {
 
     function toggleBookmark() {
         if (!fluxBookmarks || root.playUrl.length === 0) return
+        rememberPoster()
+        var poster = root.effectivePosterUrl.length > 0 ? root.effectivePosterUrl : root.posterUrl
         fluxBookmarks.toggle(root.playUrl, root.title, root.isFolder, root.formattedSize,
-                             root.extension, root.libraryName, root.parentPath)
+                             root.extension, root.libraryName, root.parentPath, poster)
     }
 
     function requestDownload() {

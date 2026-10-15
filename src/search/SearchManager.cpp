@@ -574,6 +574,10 @@ void SearchManager::startIccSearch(quint64 searchId, const QString &query) {
             item.group = isFolder ? QStringLiteral("TV & Web Series") : QStringLiteral("English Movies");
             item.posterUrl = posterUrl;
 
+            if (!posterUrl.isEmpty()) {
+                emit posterFound(playUrl, posterUrl, name);
+            }
+
             int score = SearchQuery::score(name, m_plan);
             item.matchScore = score > 0 ? score : 2;
 
