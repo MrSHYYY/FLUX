@@ -1,0 +1,94 @@
+name: Update Download Stats
+
+on:
+  release:
+    types: [published, edited, deleted]
+  schedule:
+    - cron: '0 */6 * * *' # Automatically runs every 6 hours
+  workflow_dispatch: # Allows manual one-click trigger from GitHub Actions tab
+
+permissions:
+  contents: write
+
+jobs:
+  update-stats:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.x'
+
+      - name: Fetch total downloads and update download-button.svg
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          python - << 'EOF'
+          import urllib.request
+          import json
+          import os
+          import re
+
+          repo = os.environ.get("GITHUB_REPOSITORY", "shifatsrm09/FLUX")
+          token = os.environ.get("GITHUB_TOKEN", "")
+          url = f"https://api.github.com/repos/{repo}/releases"
+
+          headers = {
+              "User-Agent": "FLUX-Updater-Action",
+              "Accept": "application/vnd.github.v3+json"
+          }
+          if token:
+              headers["Authorization"] = f"token {token}"
+
+          req = urllib.request.Request(url, headers=headers)
+          try:
+              with urllib.request.urlopen(req) as response:
+                  releases = json.loads(response.read().decode())
+          except Exception as e:
+              print(f"Error querying GitHub API: {e}")
+              exit(0)
+
+          total_downloads = sum(
+              asset.get("download_count", 0)
+              for release in releases
+              for asset in release.get("assets", [])
+          )
+
+          print(f"Total downloads across all releases: {total_downloads}")
+
+          svg_path = "resources/download-button.svg"
+          if os.path.exists(svg_path):
+              with open(svg_path, "r", encoding="utf-8") as f:
+                  content = f.read()
+
+              new_content = re.sub(
+                  r'(TOTAL DOWNLOADS:\s*)\d+',
+                  rf'\g<1>{total_downloads}',
+                  content
+              )
+
+              if content != new_content:
+                  with open(svg_path, "w", encoding="utf-8") as f:
+                      f.write(new_content)
+                  print(f"Successfully updated {svg_path} with {total_downloads} downloads.")
+              else:
+                  print("Download count has not changed.")
+          else:
+              print(f"File {svg_path} not found.")
+          EOF
+
+      - name: Commit and push if updated
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add resources/download-button.svg
+          if ! git diff --cached --quiet; then
+            git commit -m "chore(stats): update total downloads counter to latest [skip ci]"
+            git push
+          else
+            echo "No change in download count; skipping commit."
+          fi
