@@ -120,8 +120,11 @@ Rectangle {
     property real osdLevel: -1
     property real wheelAcc: 0
 
+    property bool episodesPanelOpen: false
+
     function closeMenus() {
         controlsBar.closeMenus()
+        root.episodesPanelOpen = false
     }
 
     function wakeControls() {
@@ -178,7 +181,7 @@ Rectangle {
     Timer {
         id: hideControlsTimer
         interval: 3500
-        running: !!root.player && root.player.isPlaying && !controlsBar.isUserInteracting && !topHover.hovered
+        running: !!root.player && root.player.isPlaying && !controlsBar.isUserInteracting && !topHover.hovered && !root.episodesPanelOpen
         repeat: false
         onTriggered: root.showControls = false
     }
@@ -610,6 +613,8 @@ Rectangle {
         player: root.player
         isFullscreen: root.isFullscreen
         hasNext: root.hasNext
+        hasEpisodes: (!!fluxBrowser && (fluxBrowser.hasEpisodes || (fluxBrowser.currentEpisodes && fluxBrowser.currentEpisodes.length > 1)))
+        episodesOpen: root.episodesPanelOpen
         opacity: root.showControls ? 1.0 : 0.0
         visible: opacity > 0.0
 
@@ -617,6 +622,17 @@ Rectangle {
 
         onToggleFullscreenRequested: root.toggleFullscreenRequested()
         onNextRequested: root.playNext()
+        onToggleEpisodesRequested: root.episodesPanelOpen = !root.episodesPanelOpen
+    }
+
+    EpisodesPanel {
+        id: epPanel
+        z: 60
+        opened: root.episodesPanelOpen
+        onCloseRequested: root.episodesPanelOpen = false
+        onEpisodeSelected: function(url, name) {
+            root.playNextRequested(url, name)
+        }
     }
 
     // =========================================================================

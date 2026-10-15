@@ -10,15 +10,18 @@ Item {
     property var player: null
     property bool isFullscreen: false
     property bool hasNext: false
+    property bool hasEpisodes: false
+    property bool episodesOpen: false
 
-    readonly property bool menuOpen: tracksPopup.visible
-    property bool isUserInteracting: (seekSlider.pressed || volumeSlider.pressed || tracksPopup.visible || controlsHover.hovered)
+    readonly property bool menuOpen: tracksPopup.visible || root.episodesOpen
+    property bool isUserInteracting: (seekSlider.pressed || volumeSlider.pressed || tracksPopup.visible || controlsHover.hovered || root.episodesOpen)
 
     // Used to stop the "press outside closes popup" + "click toggles popup" double-fire
     property double popupClosedAt: 0
 
     signal toggleFullscreenRequested()
     signal nextRequested()
+    signal toggleEpisodesRequested()
 
     function closeMenus() {
         tracksPopup.close()
@@ -367,6 +370,17 @@ Item {
             }
 
             Item { Layout.fillWidth: true }
+
+            // Episode list
+            IconButton {
+                id: episodesBtn
+                iconName: "episodes"
+                iconSize: 28
+                tip: "Episodes"
+                iconColor: root.episodesOpen ? Theme.accentHover : (root.hasEpisodes ? "#FFFFFF" : "#88FFFFFF")
+
+                onClicked: root.toggleEpisodesRequested()
+            }
 
             // Audio & subtitles
             IconButton {

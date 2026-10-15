@@ -132,6 +132,7 @@ qt_add_qml_module(FLUX
         qml/components/StartupPopup.qml
         qml/components/TelepartyMenu.qml
         qml/components/CardMenu.qml
+        qml/components/EpisodesPanel.qml
     RESOURCES
         resources/flux.png
         resources/v2.png

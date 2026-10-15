@@ -272,6 +272,21 @@ Item {
             ctx.arc(12, 17, 0.9, 0, PI * 2, false)
             ctx.fill()
             break
+
+        case "episodes":
+        case "playlist":
+            ctx.beginPath()
+            ctx.roundedRect(4, 5.5, 16, 2.4, 1.2, 1.2)
+            ctx.fill()
+            ctx.beginPath()
+            ctx.roundedRect(4, 10.8, 16, 2.4, 1.2, 1.2)
+            ctx.fill()
+            ctx.beginPath()
+            ctx.roundedRect(4, 16.1, 10, 2.4, 1.2, 1.2)
+            ctx.fill()
+            poly(ctx, [16.5, 15, 20.5, 17.5, 16.5, 20], true)
+            ctx.fill()
+            break
         }
     }
 

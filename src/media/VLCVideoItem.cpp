@@ -27,12 +27,28 @@ VLCVideoItem::~VLCVideoItem() {
     cleanupVlcCallbacks();
 }
 
+void VLCVideoItem::clearFrame() {
+    {
+        QMutexLocker locker(&m_mutex);
+        m_hasNewFrame = false;
+        m_displayFrame.reset();
+    }
+    m_currentImage = QImage();
+    m_textureDirty = true;
+    if (m_hasVideoFrame) {
+        m_hasVideoFrame = false;
+        emit hasVideoFrameChanged();
+    }
+    update();
+}
+
 void VLCVideoItem::setPlayer(VLCPlayer *player) {
     if (m_player == player) return;
 
     if (m_player) {
         cleanupVlcCallbacks();
         disconnect(m_player, nullptr, this, nullptr);
+        clearFrame();
     }
 
     m_player = player;
@@ -40,6 +56,8 @@ void VLCVideoItem::setPlayer(VLCPlayer *player) {
     if (m_player) {
         setupVlcCallbacks();
         connect(m_player, &VLCPlayer::mediaPlayerRecreated, this, &VLCVideoItem::setupVlcCallbacks);
+        connect(m_player, &VLCPlayer::urlChanged, this, &VLCVideoItem::clearFrame);
+        connect(m_player, &VLCPlayer::aboutToStop, this, &VLCVideoItem::clearFrame);
     }
 
     emit playerChanged();
@@ -167,7 +185,11 @@ void VLCVideoItem::displayCallback(void *opaque, void *picture) {
     {
         // Publish the finished frame: a pointer swap, effectively instant.
         QMutexLocker locker(&item->m_mutex);
-        if (!item->m_decodeFrame || !item->m_readyFrame) return;
+        if (!item->m_decodeFrame) return;
+        if (!item->m_readyFrame && item->m_videoWidth > 0 && item->m_videoHeight > 0) {
+            item->m_readyFrame = allocFrame(item->m_videoWidth, item->m_videoHeight);
+        }
+        if (!item->m_readyFrame) return;
         std::swap(item->m_decodeFrame, item->m_readyFrame);
         item->m_hasNewFrame = true;
     }

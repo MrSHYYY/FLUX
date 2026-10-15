@@ -1,5 +1,6 @@
 #include "FolderBrowser.h"
 #include "../core/Logger.h"
+#include "../core/UserStore.h"
 
 #include <QCollator>
 #include <QDir>
@@ -634,6 +635,7 @@ void FolderBrowser::requestListing(const QString &origin, const QString &href,
                 if (ls > 0) {
                     u.setPath(epPath.left(ls + 1));
                     const QString mediaFolderUrl = u.toString(QUrl::FullyEncoded);
+                    self->m_mediaToWebFolder[mediaFolderUrl] = webFolderUrl;
                     emit self->seriesMappingFound(mediaFolderUrl, webFolderUrl, pagePosterUrl, showTitle);
                 }
 
@@ -791,6 +793,12 @@ void FolderBrowser::clearNext() {
         m_nextName.clear();
         emit nextChanged();
     }
+    if (!m_currentEpisodes.isEmpty() || m_currentEpisodeIndex != -1 || !m_currentSeasonName.isEmpty()) {
+        m_currentEpisodes.clear();
+        m_currentEpisodeIndex = -1;
+        m_currentSeasonName.clear();
+        emit currentEpisodesChanged();
+    }
 }
 
 void FolderBrowser::findNext(const QString &currentFileUrl) {
@@ -804,19 +812,105 @@ void FolderBrowser::findNext(const QString &currentFileUrl) {
         return;
     }
 
+    // If we already have items loaded (e.g. browsing the folder), pre-populate immediately
+    if (!m_items.empty()) {
+        std::vector<const SearchResult *> activeFiles;
+        for (const SearchResult &r : m_items) {
+            if (!r.isFolder) activeFiles.push_back(&r);
+        }
+        if (!activeFiles.empty()) {
+            int preIdx = -1;
+            const QString targetKey = keyHref(currentFileUrl).toLower();
+            for (size_t i = 0; i < activeFiles.size(); ++i) {
+                if (keyHref(activeFiles[i]->playUrl).toLower() == targetKey
+                    || currentFileUrl.endsWith(activeFiles[i]->playUrl)
+                    || activeFiles[i]->playUrl == currentFileUrl) {
+                    preIdx = static_cast<int>(i);
+                    break;
+                }
+            }
+            if (preIdx >= 0) {
+                QVariantList epList;
+                for (size_t i = 0; i < activeFiles.size(); ++i) {
+                    const SearchResult &r = *activeFiles[i];
+                    QVariantMap ep;
+                    ep[QStringLiteral("name")] = r.displayName;
+                    ep[QStringLiteral("url")] = r.playUrl;
+                    ep[QStringLiteral("size")] = r.formattedSize;
+                    ep[QStringLiteral("isCurrent")] = (static_cast<int>(i) == preIdx);
+                    ep[QStringLiteral("index")] = static_cast<int>(i);
+                    epList.append(ep);
+                }
+                m_currentEpisodes = epList;
+                m_currentEpisodeIndex = preIdx;
+                m_currentSeasonName = folderName();
+                emit currentEpisodesChanged();
+            }
+        }
+    }
+
     QString origin, fileHref;
     if (!splitUrl(currentFileUrl, origin, fileHref)) return;
 
-    const int slash = fileHref.lastIndexOf('/');
-    if (slash < 0) return;
-    const QString parentHref = fileHref.left(slash + 1);
+    QString lookupOrigin = origin;
+    QString lookupHref;
+    QString parentHref;
+    QString fallbackOrigin;
+    QString fallbackHref;
+
+    if (fileHref.contains(QLatin1String("player.php"))) {
+        lookupOrigin = origin;
+        lookupHref = fileHref;
+        parentHref = fileHref;
+    } else {
+        const int slash = fileHref.lastIndexOf('/');
+        if (slash < 0) return;
+        parentHref = fileHref.left(slash + 1);
+
+        QString webFolder;
+        const QString parentFullUrl = origin + parentHref;
+        if (m_mediaToWebFolder.contains(parentFullUrl)) {
+            webFolder = m_mediaToWebFolder.value(parentFullUrl);
+        } else if (m_mediaToWebFolder.contains(currentFileUrl)) {
+            webFolder = m_mediaToWebFolder.value(currentFileUrl);
+        } else if (m_userStore) {
+            webFolder = m_userStore->seriesFolderFor(parentFullUrl);
+            if (webFolder.isEmpty()) webFolder = m_userStore->seriesFolderFor(currentFileUrl);
+        }
+
+        const QString parentClean = parentHref.trimmed();
+        const bool isFlatFolder = (parentClean == QLatin1String("/") || parentClean == QLatin1String("/files/") || parentClean == QLatin1String("/data/"));
+
+        if (isFlatFolder && !webFolder.isEmpty()) {
+            QString o, h;
+            if (splitUrl(webFolder, o, h)) {
+                lookupOrigin = o;
+                lookupHref = h;
+            } else {
+                lookupOrigin = origin;
+                lookupHref = parentHref;
+            }
+        } else {
+            // Primary: direct parent folder on the current media server
+            lookupOrigin = origin;
+            lookupHref = parentHref;
+
+            // Fallback: mapped web series folder on web portal
+            if (!webFolder.isEmpty()) {
+                QString o, h;
+                if (splitUrl(webFolder, o, h)) {
+                    fallbackOrigin = o;
+                    fallbackHref = h;
+                }
+            }
+        }
+    }
 
     const QString currentKey = keyHref(fileHref).toLower();
 
     QPointer<FolderBrowser> self(this);
-    requestListing(origin, parentHref, QString(), QString(),
-                   [self, token, currentKey](bool ok, std::vector<SearchResult> items) {
-        if (!self || !ok || token != self->m_nextToken) return;
+    auto handleResults = [self, token, currentKey, currentFileUrl, parentHref](bool ok, std::vector<SearchResult> items) -> bool {
+        if (!self || !ok || token != self->m_nextToken || items.empty()) return false;
 
         std::vector<const SearchResult *> files;
         QStringList names;
@@ -826,35 +920,101 @@ void FolderBrowser::findNext(const QString &currentFileUrl) {
                 names.append(r.displayName);
             }
         }
+        if (files.empty()) return false;
 
         int idx = -1;
         for (size_t i = 0; i < files.size(); ++i) {
             const QString key = QUrl::fromPercentEncoding(files[i]->rawHref.toUtf8()).toLower();
-            if (key == currentKey) { idx = static_cast<int>(i); break; }
+            const QString playKey = keyHref(files[i]->playUrl).toLower();
+            if (key == currentKey || playKey == currentKey || currentFileUrl.endsWith(files[i]->playUrl)) {
+                idx = static_cast<int>(i);
+                break;
+            }
         }
         if (idx < 0) {
-            FLUX_LOG_INFO("Browser", QString("Next episode: current file not found in its folder listing (%1 files)")
-                          .arg(files.size()));
-            return;
-        }
-
-        const int nextIdx = pickNextIndex(names, idx);
-        if (nextIdx < 0) {
-            if (static_cast<size_t>(idx) + 1 >= files.size()) {
-                FLUX_LOG_INFO("Browser", QString("Next episode: '%1' is the last video in its folder")
-                              .arg(names.at(idx)));
-            } else {
-                FLUX_LOG_INFO("Browser", QString("Next episode: '%1' does not look like part of the same series as '%2'")
-                              .arg(names.at(idx + 1), names.at(idx)));
+            const QString curFilename = QUrl(currentFileUrl).fileName().toLower();
+            if (!curFilename.isEmpty()) {
+                for (size_t i = 0; i < files.size(); ++i) {
+                    if (files[i]->displayName.toLower().contains(curFilename)
+                        || QUrl(files[i]->playUrl).fileName().toLower() == curFilename
+                        || files[i]->displayName.toLower() == curFilename) {
+                        idx = static_cast<int>(i);
+                        break;
+                    }
+                }
             }
-            return;
+        }
+        if (idx < 0 && !files.empty()) {
+            const QString curEpKey = episodeKey(currentFileUrl);
+            if (!curEpKey.isEmpty()) {
+                for (size_t i = 0; i < files.size(); ++i) {
+                    if (episodeKey(files[i]->displayName) == curEpKey
+                        || episodeKey(files[i]->playUrl) == curEpKey) {
+                        idx = static_cast<int>(i);
+                        break;
+                    }
+                }
+            }
+            if (idx < 0) {
+                idx = 0;
+            }
         }
 
-        const SearchResult &next = *files[static_cast<size_t>(nextIdx)];
-        self->m_nextUrl = next.playUrl;
-        self->m_nextName = next.displayName;
-        emit self->nextChanged();
-        FLUX_LOG_INFO("Browser", QString("Next episode resolved: %1").arg(next.displayName));
+        QVariantList epList;
+        for (size_t i = 0; i < files.size(); ++i) {
+            const SearchResult &r = *files[i];
+            QVariantMap ep;
+            ep[QStringLiteral("name")] = r.displayName;
+            ep[QStringLiteral("url")] = r.playUrl;
+            ep[QStringLiteral("size")] = r.formattedSize;
+            ep[QStringLiteral("isCurrent")] = (static_cast<int>(i) == idx);
+            ep[QStringLiteral("index")] = static_cast<int>(i);
+            epList.append(ep);
+        }
+
+        self->m_currentEpisodes = epList;
+        self->m_currentEpisodeIndex = idx;
+
+        QString season = parentHref;
+        if (season.contains(QLatin1String("player.php")) && !items.empty() && !items.front().group.isEmpty()) {
+            season = items.front().group;
+        } else {
+            if (season.endsWith('/')) season.chop(1);
+            const int ls = season.lastIndexOf('/');
+            if (ls >= 0) season = season.mid(ls + 1);
+            season = QUrl::fromPercentEncoding(season.toUtf8());
+            if (season.isEmpty() && !items.empty() && !items.front().group.isEmpty()) {
+                season = items.front().group;
+            }
+        }
+        self->m_currentSeasonName = season;
+        emit self->currentEpisodesChanged();
+
+        if (idx >= 0) {
+            const int nextIdx = pickNextIndex(names, idx);
+            if (nextIdx >= 0) {
+                const SearchResult &next = *files[static_cast<size_t>(nextIdx)];
+                self->m_nextUrl = next.playUrl;
+                self->m_nextName = next.displayName;
+                emit self->nextChanged();
+                FLUX_LOG_INFO("Browser", QString("Next episode resolved: %1").arg(next.displayName));
+            }
+        }
+        return true;
+    };
+
+    requestListing(lookupOrigin, lookupHref, QString(), QString(),
+                   [self, token, handleResults, fallbackOrigin, fallbackHref](bool ok, std::vector<SearchResult> items) {
+        if (!self || token != self->m_nextToken) return;
+        if (handleResults(ok, std::move(items))) return;
+
+        if (!fallbackHref.isEmpty() && !fallbackOrigin.isEmpty()) {
+            self->requestListing(fallbackOrigin, fallbackHref, QString(), QString(),
+                                 [self, token, handleResults](bool ok2, std::vector<SearchResult> items2) {
+                if (!self || token != self->m_nextToken) return;
+                handleResults(ok2, std::move(items2));
+            });
+        }
     });
 }
 
@@ -880,10 +1040,33 @@ void FolderBrowser::findNextLocal(const QString &filePath) {
 
     int idx = -1;
     QStringList names;
+    QVariantList epList;
     for (int i = 0; i < files.size(); ++i) {
-        names.append(files.at(i).fileName());
-        if (idx < 0 && files.at(i).fileName().compare(cur.fileName(), Qt::CaseInsensitive) == 0) idx = i;
+        const QFileInfo &f = files.at(i);
+        names.append(f.fileName());
+        const bool isCur = (idx < 0 && f.fileName().compare(cur.fileName(), Qt::CaseInsensitive) == 0);
+        if (isCur) idx = i;
+
+        QVariantMap ep;
+        ep[QStringLiteral("name")] = f.fileName();
+        ep[QStringLiteral("url")] = QString::fromLatin1(QUrl::fromLocalFile(f.absoluteFilePath()).toEncoded());
+        ep[QStringLiteral("size")] = SearchResult::formatBytes(f.size());
+        ep[QStringLiteral("isCurrent")] = isCur;
+        ep[QStringLiteral("index")] = i;
+        epList.append(ep);
     }
+
+    if (idx >= 0 && idx < epList.size()) {
+        QVariantMap curMap = epList[idx].toMap();
+        curMap[QStringLiteral("isCurrent")] = true;
+        epList[idx] = curMap;
+    }
+
+    m_currentEpisodes = epList;
+    m_currentEpisodeIndex = idx;
+    m_currentSeasonName = cur.dir().dirName();
+    emit currentEpisodesChanged();
+
     if (idx < 0) return;
 
     const int nextIdx = pickNextIndex(names, idx);

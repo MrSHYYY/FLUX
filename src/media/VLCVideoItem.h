@@ -47,6 +47,7 @@ signals:
 
 public slots:
     void onFrameReady();
+    void clearFrame();
 
 protected:
     QSGNode *updatePaintNode(QSGNode *oldNode, UpdatePaintNodeData *data) override;

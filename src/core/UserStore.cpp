@@ -81,7 +81,7 @@ UserStore::UserStore(QObject *parent)
     connect(&m_posterSaveTimer, &QTimer::timeout, this, [this]() { savePosters(); });
 
     m_tickTimer.setInterval(5000);
-    connect(&m_tickTimer, &QTimer::timeout, this, [this]() { checkpoint(false); });
+    connect(&m_tickTimer, &QTimer::timeout, this, [this]() { checkpoint(true); });
 
     m_saveTimer.setSingleShot(true);
     m_saveTimer.setInterval(4000);
@@ -241,7 +241,10 @@ void UserStore::noteStart(const QString &url, const QString &title, const QStrin
     if (e.title.isEmpty() || ((url.contains(QLatin1String("player.php")) || e.title.contains('?')) && !title.isEmpty())) {
         e.title = title;
     }
+    if (e.title.isEmpty()) e.title = title;
     e.lastPlayed = QDateTime::currentMSecsSinceEpoch();
+    e.watched = false;
+    if (e.positionMs < 0) e.positionMs = 0;
 
     m_currentKey = key;
     m_currentPlaybackKey = keyFor(playbackUrl.isEmpty() ? url : playbackUrl);
@@ -323,27 +326,17 @@ qint64 UserStore::resumePositionFor(const QString &url) const {
 }
 
 QVariantList UserStore::continueWatching() const {
-    std::vector<const HistoryEntry *> movies;
-    QHash<QString, const HistoryEntry *> series;
-    QHash<QString, SeriesLocation> locations;
+    std::vector<const HistoryEntry *> allEntries;
+    allEntries.reserve(static_cast<size_t>(m_history.size()));
+
     for (auto it = m_history.constBegin(); it != m_history.constEnd(); ++it) {
         const HistoryEntry &e = it.value();
         const bool isParty = (!m_partyKey.isEmpty() && it.key() == m_partyKey);
         if (!isParty) {
             if (e.watched) continue;
-            if (e.positionMs < kMinResumeMs) continue;
             if (e.durationMs > 0 && e.positionMs >= static_cast<qint64>(static_cast<double>(e.durationMs) * kWatchedFraction)) continue;
         }
-        const SeriesLocation location = seriesLocation(e.url);
-        if (location.key.isEmpty()) {
-            movies.push_back(&e);
-        } else {
-            auto found = series.constFind(location.key);
-            if (found == series.constEnd() || found.value()->lastPlayed < e.lastPlayed) {
-                series.insert(location.key, &e);
-                locations.insert(location.key, location);
-            }
-        }
+        allEntries.push_back(&e);
     }
 
     const auto recentFirst = [this](const HistoryEntry *a, const HistoryEntry *b) {
@@ -354,18 +347,11 @@ QVariantList UserStore::continueWatching() const {
         }
         return a->lastPlayed > b->lastPlayed;
     };
-    std::sort(movies.begin(), movies.end(), recentFirst);
-
-    std::vector<QString> seriesOrder;
-    seriesOrder.reserve(static_cast<size_t>(series.size()));
-    for (auto it = series.constBegin(); it != series.constEnd(); ++it)
-        seriesOrder.push_back(it.key());
-    std::sort(seriesOrder.begin(), seriesOrder.end(), [&series, &recentFirst](const QString &a, const QString &b) {
-        return recentFirst(series.value(a), series.value(b));
-    });
+    std::sort(allEntries.begin(), allEntries.end(), recentFirst);
 
     QVariantList list;
-    const auto appendEpisode = [this, &list](const HistoryEntry *e) {
+    for (const HistoryEntry *e : allEntries) {
+        if (list.size() >= kMaxContinueEntries) break;
         QVariantMap m;
         m["url"] = e->url;
         m["title"] = e->title;
@@ -378,32 +364,6 @@ QVariantList UserStore::continueWatching() const {
         m["lastPlayed"] = e->lastPlayed;
         m["isFolder"] = false;
         list.append(m);
-    };
-
-    for (const HistoryEntry *e : movies) {
-        if (list.size() >= kMaxContinueEntries) break;
-        appendEpisode(e);
-    }
-    for (const QString &key : seriesOrder) {
-        if (list.size() >= kMaxContinueEntries) break;
-        const SeriesLocation location = locations.value(key);
-        const QString mappedWebFolder = seriesFolderFor(location.url);
-        QVariantMap folder;
-        folder["url"] = mappedWebFolder.isEmpty() ? location.url : mappedWebFolder;
-        folder["title"] = location.title;
-        // The show's poster; failing that, the poster of the episode that was played
-        QString folderPoster = posterFor(folder["url"].toString(), location.title);
-        if (folderPoster.isEmpty()) folderPoster = posterFor(location.url, location.title);
-        if (folderPoster.isEmpty()) folderPoster = posterFor(series.value(key)->url, series.value(key)->title);
-        folder["posterUrl"] = folderPoster;
-        folder["positionMs"] = 0;
-        folder["durationMs"] = 0;
-        folder["fraction"] = 0.0;
-        folder["lastPlayed"] = series.value(key)->lastPlayed;
-        folder["isFolder"] = true;
-        list.append(folder);
-        if (list.size() < kMaxContinueEntries)
-            appendEpisode(series.value(key));
     }
     return list;
 }

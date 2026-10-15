@@ -13,6 +13,8 @@
 
 namespace Flux {
 
+class UserStore;
+
 // Browses the contents of one server directory (a "folder card" from search results),
 // with breadcrumbs for navigation. Also resolves "what is the next episode?" for a file.
 class FolderBrowser : public QAbstractListModel {
@@ -30,6 +32,12 @@ class FolderBrowser : public QAbstractListModel {
     // Next episode of the file most recently passed to findNext()
     Q_PROPERTY(QString nextUrl READ nextUrl NOTIFY nextChanged)
     Q_PROPERTY(QString nextName READ nextName NOTIFY nextChanged)
+
+    // Episode list of the season/folder most recently passed to findNext()
+    Q_PROPERTY(QVariantList currentEpisodes READ currentEpisodes NOTIFY currentEpisodesChanged)
+    Q_PROPERTY(int currentEpisodeIndex READ currentEpisodeIndex NOTIFY currentEpisodesChanged)
+    Q_PROPERTY(QString currentSeasonName READ currentSeasonName NOTIFY currentEpisodesChanged)
+    Q_PROPERTY(bool hasEpisodes READ hasEpisodes NOTIFY currentEpisodesChanged)
 
 public:
     enum Roles {
@@ -62,6 +70,12 @@ public:
     int itemCount() const { return static_cast<int>(m_items.size()); }
     QString nextUrl() const { return m_nextUrl; }
     QString nextName() const { return m_nextName; }
+    QVariantList currentEpisodes() const { return m_currentEpisodes; }
+    int currentEpisodeIndex() const { return m_currentEpisodeIndex; }
+    QString currentSeasonName() const { return m_currentSeasonName; }
+    bool hasEpisodes() const { return !m_currentEpisodes.isEmpty(); }
+
+    void setUserStore(UserStore *store) { m_userStore = store; }
 
     Q_INVOKABLE void open(const QString &folderUrl, const QString &libraryName = QString(), const QString &group = QString());
     Q_INVOKABLE void close();
@@ -83,6 +97,7 @@ signals:
     void locationChanged();
     void itemCountChanged();
     void nextChanged();
+    void currentEpisodesChanged();
     void posterFound(const QString &url, const QString &posterUrl, const QString &title);
     void seriesMappingFound(const QString &mediaFolderUrl, const QString &webFolderUrl, const QString &posterUrl, const QString &title);
 
@@ -127,6 +142,12 @@ private:
     quint64 m_nextToken = 0;
     QString m_nextUrl;
     QString m_nextName;
+
+    QVariantList m_currentEpisodes;
+    int m_currentEpisodeIndex = -1;
+    QString m_currentSeasonName;
+    QHash<QString, QString> m_mediaToWebFolder;
+    UserStore *m_userStore = nullptr;
 };
 
 } // namespace Flux

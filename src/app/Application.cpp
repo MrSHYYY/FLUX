@@ -150,6 +150,7 @@ bool Application::initialize(QQmlApplicationEngine &engine) {
 
         // Bookmarks & Posters
         m_bookmarks->setUserStore(store);
+        m_folderBrowser->setUserStore(store);
 
         connect(search, &SearchManager::posterFound, store,
                 [store](const QString &url, const QString &posterUrl, const QString &title) {

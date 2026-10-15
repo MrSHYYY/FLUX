@@ -524,6 +524,12 @@ ApplicationWindow {
                 if (!event.isAutoRepeat) window.toggleFullscreen()
                 event.accepted = true
                 break
+            case Qt.Key_Escape:
+                if (playerView.episodesPanelOpen) {
+                    playerView.episodesPanelOpen = false
+                    event.accepted = true
+                }
+                break
             }
         }
 
