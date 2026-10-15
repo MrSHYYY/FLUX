@@ -2,9 +2,11 @@
 #include "TelepartySession.h"
 #include "../media/VLCPlayer.h"
 #include "../core/Logger.h"
+#include "../core/UserStore.h"
 
 #include <QFileInfo>
 #include <QJsonObject>
+#include <QRegularExpression>
 #include <QUrl>
 #include <algorithm>
 #include <cmath>
@@ -208,6 +210,81 @@ qint64 TelepartySync::estimatedHostNowMs() const {
     return m_clockEstimator.estimatedHostTimeMs(localNowMs());
 }
 
+void TelepartySync::setUserStore(UserStore *store) {
+    m_userStore = store;
+}
+
+QString TelepartySync::iccftpBaseOrigin() const {
+    if (m_userStore) {
+        QUrl u(m_userStore->iccftpUrl(), QUrl::TolerantMode);
+        if (u.isValid() && !u.host().isEmpty()) {
+            const int port = u.port();
+            QString s = u.scheme() + QStringLiteral("://") + u.host();
+            if (port > 0 && port != 80 && port != 443) s += QStringLiteral(":") + QString::number(port);
+            return s;
+        }
+    }
+    return QStringLiteral("http://10.16.100.244");
+}
+
+QString TelepartySync::iccftpSessionToken() const {
+    if (m_userStore) {
+        return m_userStore->iccftpSession();
+    }
+    return QStringLiteral("b1bdfdae1f7e206b628274ef7eafadcd6094e07c46cd85b157c595174a369f96");
+}
+
+QString TelepartySync::iccftpHost() const {
+    if (m_userStore) {
+        QUrl u(m_userStore->iccftpUrl(), QUrl::TolerantMode);
+        if (u.isValid() && !u.host().isEmpty()) {
+            return u.host();
+        }
+    }
+    return QStringLiteral("10.16.100.244");
+}
+
+bool TelepartySync::isSameOrMatchingMedia(const QString &playerUrl, const QString &currentUrl) const {
+    if (playerUrl.isEmpty() || currentUrl.isEmpty()) return false;
+    if (playerUrl == currentUrl) return true;
+
+    const QString decPlayer = QUrl::fromPercentEncoding(playerUrl.trimmed().toUtf8());
+    const QString decCurr = QUrl::fromPercentEncoding(currentUrl.trimmed().toUtf8());
+    if (decPlayer.compare(decCurr, Qt::CaseInsensitive) == 0) return true;
+
+    // Both contain player.php with the same play ID
+    if (playerUrl.contains(QLatin1String("player.php")) && currentUrl.contains(QLatin1String("player.php"))) {
+        static const QRegularExpression playRx(QStringLiteral("[?&]play=(\\d+)"));
+        const auto mp = playRx.match(playerUrl);
+        const auto mc = playRx.match(currentUrl);
+        if (mp.hasMatch() && mc.hasMatch() && mp.captured(1) == mc.captured(1)) {
+            return true;
+        }
+    }
+
+    // Direct node url vs player.php URL
+    if (m_userStore) {
+        if (currentUrl.contains(QLatin1String("player.php"))) {
+            static const QRegularExpression playRx(QStringLiteral("[?&]play=(\\d+)"));
+            const auto mc = playRx.match(currentUrl);
+            if (mc.hasMatch()) {
+                const QString mapped = m_userStore->seriesFolderFor(playerUrl);
+                if (mapped.contains(QStringLiteral("play=") + mc.captured(1))) return true;
+            }
+        }
+        if (playerUrl.contains(QLatin1String("player.php"))) {
+            static const QRegularExpression playRx(QStringLiteral("[?&]play=(\\d+)"));
+            const auto mp = playRx.match(playerUrl);
+            if (mp.hasMatch()) {
+                const QString mapped = m_userStore->seriesFolderFor(currentUrl);
+                if (mapped.contains(QStringLiteral("play=") + mp.captured(1))) return true;
+            }
+        }
+    }
+
+    return false;
+}
+
 // ============================================================================
 // Catalog validation & compact movie IDs
 // ============================================================================
@@ -222,6 +299,7 @@ QString TelepartySync::encodeCatalogMovieId(const QString &url) const {
         return QString();
     }
 
+    const QString host = u.host();
     const QString decodedUrl = QUrl::fromPercentEncoding(url.toUtf8());
 
     // 1. Check built-in catalog items for ultra-short IDs ("ant-man", "civil-war", "kingdom-s1e1")
@@ -232,7 +310,23 @@ QString TelepartySync::encodeCatalogMovieId(const QString &url) const {
         }
     }
 
-    // 2. Match against the 17 official BDIX catalog roots in MediaLibraryModel
+    // 2. ICC FTP: player.php?play=<id>
+    if (url.contains(QLatin1String("player.php"))) {
+        static const QRegularExpression playRx(QStringLiteral("[?&]play=(\\d+)"));
+        const auto match = playRx.match(url);
+        if (match.hasMatch()) {
+            return QStringLiteral("icc:play:") + match.captured(1);
+        }
+    }
+
+    // 3. ICC FTP: direct storage nodes (10.16.100.x or user-configured ICC FTP host)
+    const QString configuredIccHost = iccftpHost();
+    if (host.startsWith(QStringLiteral("10.16.100.")) ||
+        (!configuredIccHost.isEmpty() && host.compare(configuredIccHost, Qt::CaseInsensitive) == 0)) {
+        return QStringLiteral("icc:node:") + u.authority() + u.path(QUrl::FullyEncoded);
+    }
+
+    // 4. Match against the official BDIX catalog roots in MediaLibraryModel
     const MediaRoot *bestRoot = nullptr;
     QString bestRelPath;
     int bestRootLen = -1;
@@ -278,11 +372,28 @@ QString TelepartySync::encodeCatalogMovieId(const QString &url) const {
         }
     }
 
-    if (!bestRoot || bestRelPath.isEmpty()) {
-        return QString();
+    if (bestRoot && !bestRelPath.isEmpty()) {
+        return bestRoot->id + QLatin1Char(':') + bestRelPath;
     }
 
-    return bestRoot->id + QLatin1Char(':') + bestRelPath;
+    // 5. Dhaka Flix direct node fallback (e.g. 172.16.50.x)
+    if (host.startsWith(QStringLiteral("172.16.50."))) {
+        return QStringLiteral("df:node:") + u.authority() + u.path(QUrl::FullyEncoded);
+    }
+
+    // 6. Generic BDIX stream URL fallback (for any video file on BDIX)
+    if (url.endsWith(QStringLiteral(".mp4"), Qt::CaseInsensitive) ||
+        url.endsWith(QStringLiteral(".mkv"), Qt::CaseInsensitive) ||
+        url.endsWith(QStringLiteral(".avi"), Qt::CaseInsensitive) ||
+        url.endsWith(QStringLiteral(".webm"), Qt::CaseInsensitive) ||
+        url.endsWith(QStringLiteral(".ts"), Qt::CaseInsensitive) ||
+        url.endsWith(QStringLiteral(".m4v"), Qt::CaseInsensitive) ||
+        url.contains(QLatin1String("/ftps")) ||
+        url.contains(QLatin1String("DHAKA-FLIX"))) {
+        return QStringLiteral("bdix:") + u.authority() + u.path(QUrl::FullyEncoded);
+    }
+
+    return QString();
 }
 
 bool TelepartySync::resolveCatalogMovie(const QVariantMap &data, QString &outUrl, QString &outTitle) const {
@@ -313,7 +424,56 @@ bool TelepartySync::resolveCatalogMovie(const QVariantMap &data, QString &outUrl
         }
     }
 
-    // 2. Validate "<rootId>:<relativePath>" against MediaLibraryModel
+    // 2. ICC FTP player.php IDs: "icc:play:<id>" or legacy "icc:<id>"
+    if (id.startsWith(QLatin1String("icc:play:")) ||
+        (id.startsWith(QLatin1String("icc:")) && !id.startsWith(QLatin1String("icc:node:")))) {
+        const QString playId = id.startsWith(QLatin1String("icc:play:")) ? id.mid(9) : id.mid(4);
+        if (!playId.isEmpty()) {
+            const QString base = iccftpBaseOrigin();
+            const QString session = iccftpSessionToken();
+            outUrl = base + QStringLiteral("/player.php?play=") + playId;
+            if (!session.isEmpty()) {
+                outUrl += QStringLiteral("&session=") + session;
+            }
+            outTitle = (providedTitle.isEmpty() ? QStringLiteral("ICC FTP Video") : providedTitle).left(kMaxTitleLength);
+            return true;
+        }
+    }
+
+    // 3. ICC FTP direct node: "icc:node:<authority><path>"
+    if (id.startsWith(QLatin1String("icc:node:"))) {
+        const QString remainder = id.mid(9);
+        if (!remainder.isEmpty() && !hasUnsafeCharactersOrTraversal(remainder)) {
+            outUrl = QStringLiteral("http://") + remainder;
+            const QString fallbackTitle = deriveTitleFromPath(QUrl(outUrl).path());
+            outTitle = (providedTitle.isEmpty() ? fallbackTitle : providedTitle).left(kMaxTitleLength);
+            return true;
+        }
+    }
+
+    // 4. Dhaka Flix direct node: "df:node:<authority><path>"
+    if (id.startsWith(QLatin1String("df:node:"))) {
+        const QString remainder = id.mid(8);
+        if (!remainder.isEmpty() && !hasUnsafeCharactersOrTraversal(remainder)) {
+            outUrl = QStringLiteral("http://") + remainder;
+            const QString fallbackTitle = deriveTitleFromPath(QUrl(outUrl).path());
+            outTitle = (providedTitle.isEmpty() ? fallbackTitle : providedTitle).left(kMaxTitleLength);
+            return true;
+        }
+    }
+
+    // 5. Generic BDIX direct stream: "bdix:<authority><path>"
+    if (id.startsWith(QLatin1String("bdix:"))) {
+        const QString remainder = id.mid(5);
+        if (!remainder.isEmpty() && !hasUnsafeCharactersOrTraversal(remainder)) {
+            outUrl = QStringLiteral("http://") + remainder;
+            const QString fallbackTitle = deriveTitleFromPath(QUrl(outUrl).path());
+            outTitle = (providedTitle.isEmpty() ? fallbackTitle : providedTitle).left(kMaxTitleLength);
+            return true;
+        }
+    }
+
+    // 6. Validate "<rootId>:<relativePath>" against MediaLibraryModel
     const int colon = id.indexOf(QLatin1Char(':'));
     if (colon <= 0 || colon >= id.size() - 1) {
         return false;
@@ -368,7 +528,7 @@ void TelepartySync::setWatching(bool watching) {
 
     // Coming back to a video the party is on (e.g. via "Now Playing"): catch up with it
     if (watching && m_session && m_session->active() && !m_currentUrl.isEmpty()
-        && m_player && m_player->url() == m_currentUrl) {
+        && m_player && isSameOrMatchingMedia(m_player->url(), m_currentUrl)) {
         if (m_mediaMode == TelepartyMediaMode::LocalFile) {
             updateLocalVerificationReadiness(true);
             if (isLocalParticipantSynchronized() && m_timeline.isValid()) {
@@ -678,7 +838,7 @@ void TelepartySync::sendState() {
         emit currentMediaChanged();
     }
     if (m_currentUrl.isEmpty()) return;
-    if (m_needState || m_player->url() != m_currentUrl) return; // not in a position to answer
+    if (m_needState || !isSameOrMatchingMedia(m_player->url(), m_currentUrl)) return; // not in a position to answer
     const QString st = m_player->state();
     if (st == QLatin1String("Opening") || st == QLatin1String("Idle") || st == QLatin1String("Stopped")) return;
 
@@ -814,7 +974,7 @@ void TelepartySync::handleTimeSync(const QVariantMap &data, const QString &from)
 
 void TelepartySync::updateLocalReadiness(bool allowBroadcast) {
     ParticipantReadiness next = ParticipantReadiness::Idle;
-    if (m_player && !m_currentUrl.isEmpty() && m_player->url() == m_currentUrl) {
+    if (m_player && !m_currentUrl.isEmpty() && isSameOrMatchingMedia(m_player->url(), m_currentUrl)) {
         const QString st = m_player->state();
         if (st == QLatin1String("Error")) {
             next = ParticipantReadiness::Error;
@@ -985,7 +1145,7 @@ void TelepartySync::handleState(const QVariantMap &data, const QString &from) {
     emit diagnosticsChanged();
 
     // Already on that video on the player page: line up with the others
-    if (m_watching && m_player && url == m_player->url()) {
+    if (m_watching && m_player && isSameOrMatchingMedia(m_player->url(), url)) {
         if (m_player->state() == QLatin1String("Opening") || m_player->isBuffering() || m_pendingSync) {
             m_pendingSync = true;
             m_pendingTimeMs = liveExpectedPos;
@@ -2060,7 +2220,7 @@ void TelepartySync::updateLocalVerificationReadiness(bool allowBroadcast) {
     LocalVerificationState nextState = m_localVerificationState;
     if (!m_player) {
         nextState = LocalVerificationState::ReadyToSync;
-    } else if (m_player->url() != m_currentUrl) {
+    } else if (!isSameOrMatchingMedia(m_player->url(), m_currentUrl)) {
         nextState = LocalVerificationState::OpeningMedia;
     } else {
         const QString st = m_player->state();
@@ -2084,7 +2244,7 @@ void TelepartySync::updateLocalVerificationReadiness(bool allowBroadcast) {
     }
 
     // Hold local player paused at the initial position until playback start is committed
-    if (!m_localPlaybackCommitted && m_player && m_player->url() == m_currentUrl && m_player->isPlaying()) {
+    if (!m_localPlaybackCommitted && m_player && isSameOrMatchingMedia(m_player->url(), m_currentUrl) && m_player->isPlaying()) {
         ScopedInternalAction guard(m_internalActionDepth);
         m_player->remotePause();
     }
@@ -2190,7 +2350,7 @@ void TelepartySync::executeScheduledAction(const ScheduledAction &action) {
     }
     // Not on the player page (or not loaded on the party video yet): keep tracking the
     // party's timestamp so clicking Continue Watching / Now Playing starts right there.
-    if (!m_watching || m_currentUrl.isEmpty() || !m_player || m_player->url() != m_currentUrl) {
+    if (!m_watching || m_currentUrl.isEmpty() || !m_player || !isSameOrMatchingMedia(m_player->url(), m_currentUrl)) {
         return;
     }
 
@@ -2287,7 +2447,7 @@ void TelepartySync::evaluateDriftTick() {
     if (!m_session || !m_session->active() || !m_watching || !m_player) {
         return;
     }
-    if (m_currentUrl.isEmpty() || m_player->url() != m_currentUrl || !m_timeline.isValid()) {
+    if (m_currentUrl.isEmpty() || !isSameOrMatchingMedia(m_player->url(), m_currentUrl) || !m_timeline.isValid()) {
         return;
     }
     if (m_pendingSync || m_needState || m_scheduler.pendingCount() > 0) {

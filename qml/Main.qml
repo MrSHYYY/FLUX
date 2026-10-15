@@ -142,10 +142,17 @@ ApplicationWindow {
         if (!a || !b) return false
         if (a === b) return true
         try {
-            return decodeURIComponent(a) === decodeURIComponent(b)
-        } catch (e) {
-            return false
+            if (decodeURIComponent(a) === decodeURIComponent(b)) return true
+        } catch (e) {}
+
+        if (a.indexOf("player.php") !== -1 && b.indexOf("player.php") !== -1) {
+            var ma = a.match(/[?&]play=(\d+)/)
+            var mb = b.match(/[?&]play=(\d+)/)
+            if (ma && mb && ma[1] === mb[1]) {
+                return true
+            }
         }
+        return false
     }
 
     function playMedia(url, title) {
@@ -161,7 +168,7 @@ ApplicationWindow {
     function playResolvedMedia(sourceUrl, directUrl, title) {
         var playbackUrl = directUrl
         // Teleparty is for direct streams only. Offline Library playback stays outside the room.
-        if (window.inTeleparty && fluxSync && !fluxSync.isStreamUrl(sourceUrl)) {
+        if (window.inTeleparty && fluxSync && !fluxSync.isStreamUrl(sourceUrl) && !fluxSync.isStreamUrl(directUrl)) {
             return
         }
 
@@ -210,7 +217,8 @@ ApplicationWindow {
         }
 
         if (window.inTeleparty && fluxSync) {
-            fluxSync.broadcastOpen(sourceUrl, title)
+            var partyUrl = (playbackUrl && fluxSync.isStreamUrl(playbackUrl)) ? playbackUrl : sourceUrl
+            fluxSync.broadcastOpen(partyUrl, title)
         }
     }
 
@@ -245,17 +253,28 @@ ApplicationWindow {
 
         playerView.offerResume(0)
 
-        if (fluxPlayer) {
-            if (window.sameMediaUrl(fluxPlayer.url, url)
-                    && (fluxPlayer.state === "Paused" || fluxPlayer.state === "Playing")) {
-                if (startMs > 0) fluxPlayer.remoteSeekTo(startMs)
-                if (fluxPlayer.isPaused) fluxPlayer.remoteResume()
-            } else if (startMs > 0) {
-                fluxPlayer.playFrom(url, startMs)
-            } else {
-                fluxPlayer.play(url)
+        function startPlayback(targetUrl) {
+            if (fluxPlayer) {
+                if (window.sameMediaUrl(fluxPlayer.url, targetUrl)
+                        && (fluxPlayer.state === "Paused" || fluxPlayer.state === "Playing")) {
+                    if (startMs > 0) fluxPlayer.remoteSeekTo(startMs)
+                    if (fluxPlayer.isPaused) fluxPlayer.remoteResume()
+                } else if (startMs > 0) {
+                    fluxPlayer.playFrom(targetUrl, startMs)
+                } else {
+                    fluxPlayer.play(targetUrl)
+                }
             }
         }
+
+        if (url && url.indexOf("player.php") !== -1 && fluxSearch) {
+            fluxSearch.resolvePlayUrl(url, function(directUrl) {
+                startPlayback((directUrl && directUrl.length > 0) ? directUrl : url)
+            })
+            return
+        }
+
+        startPlayback(url)
     }
 
     function returnToHome() {

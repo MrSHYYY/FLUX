@@ -229,13 +229,171 @@ Item {
         }
     }
 
-    // ---- Right: now playing, dev tools, window controls -----------------------------
+    // ---- Right: server selection, now playing, dev tools, window controls ----
     RowLayout {
         anchors.right: parent.right
         anchors.top: parent.top
         anchors.bottom: parent.bottom
         spacing: 0
         z: 2
+
+        // Server selection: direct switch between Server 1 (Dhaka Flix) and Server 2 (ICC FTP)
+        Rectangle {
+            id: serverSelector
+
+            readonly property int activeServerIndex: (fluxUser && fluxUser.activeServer === 1) ? 1 : 2
+            readonly property bool isWide: root.width >= 1120
+
+            Layout.alignment: Qt.AlignVCenter
+            Layout.rightMargin: 8
+            implicitHeight: 24
+            implicitWidth: segmentsRow.width + 4
+            radius: 12
+            color: "#1FFFFFFF"
+            border.width: 1
+            border.color: Theme.border
+
+            opacity: root.overlayMode ? 0.0 : 1.0
+            visible: opacity > 0.0
+            Behavior on opacity { NumberAnimation { duration: 200 } }
+
+            // Sliding active indicator
+            Rectangle {
+                id: activeIndicator
+                height: 20
+                radius: 10
+                anchors.verticalCenter: parent.verticalCenter
+                color: Theme.accent
+                x: segmentsRow.x + (serverSelector.activeServerIndex === 1 ? seg1.x : seg2.x)
+                width: serverSelector.activeServerIndex === 1 ? seg1.width : seg2.width
+
+                Behavior on x { NumberAnimation { duration: 160; easing.type: Easing.OutCubic } }
+                Behavior on width { NumberAnimation { duration: 160; easing.type: Easing.OutCubic } }
+            }
+
+            Row {
+                id: segmentsRow
+                anchors.verticalCenter: parent.verticalCenter
+                x: 2
+                spacing: 0
+
+                Item {
+                    id: seg1
+                    height: 20
+                    width: seg1Row.implicitWidth + 18
+
+                    Rectangle {
+                        anchors.fill: parent
+                        radius: 10
+                        color: "#1AFFFFFF"
+                        visible: seg1Mouse.containsMouse && serverSelector.activeServerIndex !== 1
+                    }
+
+                    Row {
+                        id: seg1Row
+                        anchors.centerIn: parent
+                        spacing: 5
+
+                        Rectangle {
+                            width: 5
+                            height: 5
+                            radius: 2.5
+                            anchors.verticalCenter: parent.verticalCenter
+                            color: "#FFFFFF"
+                            opacity: (serverSelector.activeServerIndex === 1) ? 1.0 : 0.0
+                            Behavior on opacity { NumberAnimation { duration: 140 } }
+                        }
+
+                        Text {
+                            text: serverSelector.isWide ? "Server 1 (Dhaka Flix)" : "Server 1"
+                            color: (serverSelector.activeServerIndex === 1) ? "#FFFFFF"
+                                   : (seg1Mouse.containsMouse ? "#FFFFFF" : Theme.textDim)
+                            font.pixelSize: 11
+                            font.weight: (serverSelector.activeServerIndex === 1) ? Font.DemiBold : Font.Normal
+                            anchors.verticalCenter: parent.verticalCenter
+                            Behavior on color { ColorAnimation { duration: 120 } }
+                        }
+                    }
+
+                    MouseArea {
+                        id: seg1Mouse
+                        anchors.fill: parent
+                        hoverEnabled: true
+                        cursorShape: Qt.PointingHandCursor
+                        onClicked: {
+                            if (fluxUser && fluxUser.activeServer !== 1) {
+                                fluxUser.activeServer = 1
+                                if (fluxBrowser && fluxBrowser.active) fluxBrowser.close()
+                            }
+                        }
+                    }
+
+                    FluxToolTip {
+                        visible: seg1Mouse.containsMouse
+                        delay: 400
+                        text: "Server 1 (Dhaka Flix) \u2014 BDIX directory indexer"
+                    }
+                }
+
+                Item {
+                    id: seg2
+                    height: 20
+                    width: seg2Row.implicitWidth + 18
+
+                    Rectangle {
+                        anchors.fill: parent
+                        radius: 10
+                        color: "#1AFFFFFF"
+                        visible: seg2Mouse.containsMouse && serverSelector.activeServerIndex !== 2
+                    }
+
+                    Row {
+                        id: seg2Row
+                        anchors.centerIn: parent
+                        spacing: 5
+
+                        Rectangle {
+                            width: 5
+                            height: 5
+                            radius: 2.5
+                            anchors.verticalCenter: parent.verticalCenter
+                            color: "#FFFFFF"
+                            opacity: (serverSelector.activeServerIndex === 2) ? 1.0 : 0.0
+                            Behavior on opacity { NumberAnimation { duration: 140 } }
+                        }
+
+                        Text {
+                            text: serverSelector.isWide ? "Server 2 (ICC FTP)" : "Server 2"
+                            color: (serverSelector.activeServerIndex === 2) ? "#FFFFFF"
+                                   : (seg2Mouse.containsMouse ? "#FFFFFF" : Theme.textDim)
+                            font.pixelSize: 11
+                            font.weight: (serverSelector.activeServerIndex === 2) ? Font.DemiBold : Font.Normal
+                            anchors.verticalCenter: parent.verticalCenter
+                            Behavior on color { ColorAnimation { duration: 120 } }
+                        }
+                    }
+
+                    MouseArea {
+                        id: seg2Mouse
+                        anchors.fill: parent
+                        hoverEnabled: true
+                        cursorShape: Qt.PointingHandCursor
+                        onClicked: {
+                            if (fluxUser && fluxUser.activeServer !== 2) {
+                                fluxUser.activeServer = 2
+                                if (fluxBrowser && fluxBrowser.active) fluxBrowser.close()
+                            }
+                        }
+                    }
+
+                    FluxToolTip {
+                        visible: seg2Mouse.containsMouse
+                        delay: 400
+                        text: "Server 2 (ICC FTP) \u2014 Direct high-speed streaming"
+                    }
+                }
+            }
+        }
 
         // Return to the player while something is streaming
         Rectangle {

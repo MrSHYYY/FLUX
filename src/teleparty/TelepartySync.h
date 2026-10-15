@@ -15,6 +15,7 @@ namespace Flux {
 
 class TelepartySession;
 class VLCPlayer;
+class UserStore;
 
 // Keeps every member's player in step using an authoritative timeline, 4-timestamp
 // monotonic clock synchronization, future action scheduling, and a three-tier
@@ -69,6 +70,9 @@ public:
 
     TelepartySync(TelepartySession *session, VLCPlayer *player, QObject *parent = nullptr);
     ~TelepartySync() override;
+
+    void setUserStore(UserStore *store);
+    UserStore* userStore() const { return m_userStore; }
 
     bool watching() const { return m_watching; }
     void setWatching(bool watching);
@@ -267,8 +271,14 @@ private:
     qint64 estimatedHostNowMs() const;
     static QString formatTime(qint64 ms);
 
+    QString iccftpBaseOrigin() const;
+    QString iccftpSessionToken() const;
+    QString iccftpHost() const;
+    bool isSameOrMatchingMedia(const QString &playerUrl, const QString &currentUrl) const;
+
     TelepartySession *m_session = nullptr;
     VLCPlayer *m_player = nullptr;
+    UserStore *m_userStore = nullptr;
     MediaLibraryModel m_catalog;
 
     std::shared_ptr<MonotonicClock> m_clock;

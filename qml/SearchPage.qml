@@ -117,98 +117,19 @@ Item {
             width: homeFlick.width
             spacing: 0
 
-            // ---- Search ---------------------------------------------------------------
-            Item {
-                id: searchArea
-
-                width: homeColumn.width
-                height: root.topInset + 150
-                clip: true
-
-                // One subtle ambient glow behind the search box
-                GlowOrb {
-                    width: 900
-                    height: 900
-                    x: searchArea.width / 2 - 450
-                    y: -520
-                    color: Theme.accent
-                    strength: 0.16
-                }
-
-                Rectangle {
-                    id: heroSearch
-
-                    width: Math.min(searchArea.width - 64, 720)
-                    height: 62
-                    anchors.horizontalCenter: parent.horizontalCenter
-                    y: root.topInset + 40
-                    radius: 31
-                    color: "#D915151A"
-                    border.width: initialInput.activeFocus ? 2 : 1
-                    border.color: initialInput.activeFocus ? Theme.accent : "#38FFFFFF"
-
-                    Behavior on border.color { ColorAnimation { duration: 180 } }
-
-                    RowLayout {
-                        anchors.fill: parent
-                        anchors.leftMargin: 24
-                        anchors.rightMargin: 9
-                        spacing: 14
-
-                        FluxIcon {
-                            name: "search"
-                            size: 22
-                            color: initialInput.activeFocus ? Theme.text : Theme.textMute
-                            Layout.alignment: Qt.AlignVCenter
-                        }
-
-                        TextField {
-                            id: initialInput
-                            Layout.fillWidth: true
-                            placeholderText: "Search movies, shows, episodes..."
-                            placeholderTextColor: Theme.textMute
-                            font.pixelSize: 16
-                            color: Theme.text
-                            selectedTextColor: "#FFFFFF"
-                            selectionColor: Theme.accent
-                            background: null
-
-                            onAccepted: {
-                                if (fluxSearch && text.trim().length > 0) {
-                                    fluxSearch.search(text.trim())
-                                }
-                            }
-                        }
-
-                        FluxButton {
-                            id: initialSearchBtn
-                            text: "Search"
-                            implicitHeight: 44
-                            enabled: !(fluxSearch && fluxSearch.isSearching)
-
-                            onClicked: {
-                                if (fluxSearch && initialInput.text.trim().length > 0) {
-                                    fluxSearch.search(initialInput.text.trim())
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-
             // ---- Continue Watching -------------------------------------------------------
             Item {
                 id: continueSection
 
                 width: homeColumn.width
-                height: continueList.count > 0 ? (continueHeader.height + continueList.height + 36) : 0
+                height: continueList.count > 0 ? (root.topInset + 16 + continueHeader.height + 6 + continueList.height + 20) : 0
                 visible: continueList.count > 0
 
                 RowLayout {
                     id: continueHeader
 
                     x: root.pageMargin
-                    y: 0
+                    y: root.topInset + 16
                     width: parent.width - root.pageMargin * 2
                     height: 40
 
@@ -252,7 +173,7 @@ Item {
                     id: continueList
 
                     x: root.pageMargin - 7
-                    y: continueHeader.height + 4
+                    y: continueHeader.y + continueHeader.height + 6
                     width: parent.width - root.pageMargin * 2 + 14
                     height: 176
                     orientation: ListView.Horizontal
@@ -261,7 +182,10 @@ Item {
                     model: {
                         var items = fluxUser ? fluxUser.continueWatching : []
                         if (fluxTeleparty && fluxTeleparty.active && fluxSync) {
-                            return items.filter(function(item) { return fluxSync.isStreamUrl(item.url) })
+                            return items.filter(function(item) {
+                                if (item.isFolder === true) return true
+                                return fluxSync.isStreamUrl(item.url)
+                            })
                         }
                         return items
                     }
@@ -312,6 +236,85 @@ Item {
 
                         onDownloadRequested: function(url, itemTitle, isPack) {
                             root.startDownload(url, itemTitle, isPack)
+                        }
+                    }
+                }
+            }
+
+            // ---- Search ---------------------------------------------------------------
+            Item {
+                id: searchArea
+
+                width: homeColumn.width
+                height: (continueList.count > 0 ? 16 : (root.topInset + 36)) + heroSearch.height + 28
+                clip: true
+
+                // One subtle ambient glow behind the search box
+                GlowOrb {
+                    width: 900
+                    height: 900
+                    x: searchArea.width / 2 - 450
+                    y: heroSearch.y + heroSearch.height / 2 - 450
+                    color: Theme.accent
+                    strength: 0.16
+                }
+
+                Rectangle {
+                    id: heroSearch
+
+                    width: Math.min(searchArea.width - 64, 720)
+                    height: 62
+                    anchors.horizontalCenter: parent.horizontalCenter
+                    y: continueList.count > 0 ? 16 : (root.topInset + 36)
+                    radius: 31
+                    color: "#D915151A"
+                    border.width: initialInput.activeFocus ? 2 : 1
+                    border.color: initialInput.activeFocus ? Theme.accent : "#38FFFFFF"
+
+                    Behavior on border.color { ColorAnimation { duration: 180 } }
+
+                    RowLayout {
+                        anchors.fill: parent
+                        anchors.leftMargin: 24
+                        anchors.rightMargin: 9
+                        spacing: 14
+
+                        FluxIcon {
+                            name: "search"
+                            size: 22
+                            color: initialInput.activeFocus ? Theme.text : Theme.textMute
+                            Layout.alignment: Qt.AlignVCenter
+                        }
+
+                        TextField {
+                            id: initialInput
+                            Layout.fillWidth: true
+                            placeholderText: "Search movies, shows, episodes..."
+                            placeholderTextColor: Theme.textMute
+                            font.pixelSize: 16
+                            color: Theme.text
+                            selectedTextColor: "#FFFFFF"
+                            selectionColor: Theme.accent
+                            background: null
+
+                            onAccepted: {
+                                if (fluxSearch && text.trim().length > 0) {
+                                    fluxSearch.search(text.trim())
+                                }
+                            }
+                        }
+
+                        FluxButton {
+                            id: initialSearchBtn
+                            text: "Search"
+                            implicitHeight: 44
+                            enabled: !(fluxSearch && fluxSearch.isSearching)
+
+                            onClicked: {
+                                if (fluxSearch && initialInput.text.trim().length > 0) {
+                                    fluxSearch.search(initialInput.text.trim())
+                                }
+                            }
                         }
                     }
                 }
