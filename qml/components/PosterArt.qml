@@ -14,6 +14,11 @@ Item {
 
     readonly property int composition: Theme.posterStyle(root.seed)
 
+    // Folder art proportions: Maintain a classic landscape aspect ratio (~1.48:1)
+    // so it never stretches vertically regardless of whether the card is wide or tall.
+    readonly property real folderW: Math.round(Math.max(76, Math.min(root.width * 0.54, 108)))
+    readonly property real folderH: Math.round(folderW * 0.68)
+
     // Everything drifts slightly on hover for a subtle parallax
     Item {
         id: art
@@ -203,39 +208,74 @@ Item {
             visible: root.isFolder
             anchors.fill: parent
 
+            // Back tilted folder sheet for visual depth
             Rectangle {
-                width: root.width * 0.46
-                height: root.height * 0.40
-                radius: 10
-                x: root.width * 0.5 - width / 2 + 9
-                y: root.height * 0.15
-                rotation: 5
-                color: "#0FFFFFFF"
+                width: Math.round(root.folderW * 0.94)
+                height: root.folderH
+                radius: 8
+                anchors.horizontalCenter: parent.horizontalCenter
+                anchors.horizontalCenterOffset: 6
+                y: folderBody.y - Math.round(root.folderH * 0.14)
+                rotation: 4.5
+                color: "#0EFFFFFF"
                 border.width: 1
-                border.color: "#14FFFFFF"
+                border.color: "#18FFFFFF"
             }
 
+            // Document sheet peeking from behind the folder tab
+            Rectangle {
+                width: Math.round(root.folderW * 0.78)
+                height: Math.round(root.folderH * 0.58)
+                radius: 5
+                anchors.horizontalCenter: parent.horizontalCenter
+                anchors.horizontalCenterOffset: -2
+                y: folderBody.y - Math.round(root.folderH * 0.20)
+                color: "#14FFFFFF"
+                border.width: 1
+                border.color: "#24FFFFFF"
+            }
+
+            // Main front folder body
             Rectangle {
                 id: folderBody
 
-                width: root.width * 0.5
-                height: root.height * 0.40
-                radius: 10
-                x: root.width * 0.5 - width / 2
-                y: root.height * 0.26
-                color: "#1AFFFFFF"
+                width: root.folderW
+                height: root.folderH
+                radius: 8
+                anchors.horizontalCenter: parent.horizontalCenter
+                y: Math.round(root.height * 0.35 - root.folderH / 2)
+                color: "#1CFFFFFF"
                 border.width: 1
-                border.color: "#2EFFFFFF"
+                border.color: "#30FFFFFF"
 
+                // Folder tab (top-left)
                 Rectangle {
-                    x: 14
-                    y: -7
-                    width: folderBody.width * 0.34
-                    height: 12
-                    radius: 6
-                    color: "#1AFFFFFF"
+                    x: 10
+                    y: -Math.round(root.folderH * 0.16)
+                    width: Math.round(root.folderW * 0.36)
+                    height: Math.round(root.folderH * 0.22)
+                    radius: 5
+                    color: "#1CFFFFFF"
                     border.width: 1
-                    border.color: "#2EFFFFFF"
+                    border.color: "#30FFFFFF"
+                }
+
+                // Seamless blend cover for the tab's bottom border
+                Rectangle {
+                    x: 11
+                    y: 0
+                    width: Math.round(root.folderW * 0.36) - 2
+                    height: 2
+                    color: folderBody.color
+                }
+
+                // Centered folder icon vector
+                FluxIcon {
+                    name: "folder"
+                    size: Math.round(root.folderH * 0.44)
+                    color: "#5AFFFFFF"
+                    anchors.centerIn: parent
+                    anchors.verticalCenterOffset: 1
                 }
             }
         }

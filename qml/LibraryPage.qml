@@ -303,7 +303,8 @@ Item {
         GridView {
             id: libraryGrid
 
-            readonly property int columns: Math.max(1, Math.floor(width / 250))
+            readonly property int targetCardW: 172
+            readonly property int columns: Math.max(2, Math.floor(width / targetCardW))
 
             Layout.fillWidth: true
             Layout.fillHeight: true
@@ -311,7 +312,7 @@ Item {
             clip: true
             model: root.entries
             cellWidth: Math.floor(width / columns)
-            cellHeight: Math.round(cellWidth * 0.62) + 14
+            cellHeight: Math.round(cellWidth * 1.5)
             boundsBehavior: Flickable.StopAtBounds
             cacheBuffer: 800
 
