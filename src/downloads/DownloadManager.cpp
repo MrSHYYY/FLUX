@@ -65,9 +65,21 @@ QStringList decodedSegments(const QString &url) {
 // Folder name for a pack. A bare "Season 2" folder is prefixed with its parent so seasons of
 // different shows never end up in the same place.
 QString packFolderName(const QString &url, const QString &title) {
+    const QString trimmedTitle = title.trimmed();
+    if (!trimmedTitle.isEmpty() && (url.contains(QLatin1String("player.php")) || url.contains(QLatin1String("play=")) || url.contains('?'))) {
+        return trimmedTitle;
+    }
+
     const QStringList segs = decodedSegments(url);
-    QString name = segs.isEmpty() ? title : segs.last();
-    if (name.isEmpty()) name = title;
+    QString name;
+    if (!segs.isEmpty() && !segs.last().contains(QLatin1String(".php"), Qt::CaseInsensitive)) {
+        name = segs.last();
+    } else {
+        name = trimmedTitle;
+    }
+    if (name.isEmpty() || name.compare(QLatin1String("player.php"), Qt::CaseInsensitive) == 0) {
+        name = !trimmedTitle.isEmpty() ? trimmedTitle : QStringLiteral("Series Pack");
+    }
 
     static const QRegularExpression seasonRe(QStringLiteral("^(?:season|series|s)[\\s._\\-]*\\d{1,2}(?:\\b.*)?$"),
                                              QRegularExpression::CaseInsensitiveOption);
@@ -1022,7 +1034,7 @@ int DownloadManager::downloadPack(const QString &folderUrl, const QString &title
     if (folderUrl.isEmpty()) return 0;
 
     QString url = folderUrl;
-    if (!url.endsWith('/')) url += QLatin1Char('/');
+    if (!url.contains('?') && !url.endsWith('/')) url += QLatin1Char('/');
     if (Job *dup = findActiveBySource(url)) {
         if (dup->status == Status::Paused) resume(dup->id);
         return dup->id;

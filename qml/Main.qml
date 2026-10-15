@@ -363,14 +363,15 @@ ApplicationWindow {
                 return
             }
 
+            if (currentPage === "player" && playerView.menuOpen) {
+                playerView.closeMenus()
+                return
+            }
+
             if (isFullscreen) {
                 toggleFullscreen()
             } else if (currentPage === "player") {
-                if (playerView.menuOpen) {
-                    playerView.closeMenus()
-                } else {
-                    window.returnToSearch()
-                }
+                window.returnToSearch()
             } else if (currentPage === "library") {
                 // Inside a Library folder: step out one level
                 libraryPage.goUp()

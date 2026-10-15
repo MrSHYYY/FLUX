@@ -102,7 +102,7 @@ Rectangle {
 
     property bool showControls: true
 
-    readonly property bool menuOpen: controlsBar.menuOpen
+    readonly property bool menuOpen: controlsBar.menuOpen || root.episodesPanelOpen
     readonly property bool hasError: (!!root.player && root.player.state === "Error")
     readonly property bool buffering: (!!root.player && root.player.isBuffering)
     readonly property bool showCenterPlay: (!!root.player && !root.buffering && !root.hasError
