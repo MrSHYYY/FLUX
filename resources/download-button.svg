@@ -10,7 +10,7 @@
   <rect x="0.5" y="0.5" width="343" height="48" fill="#313338" stroke="#000000" stroke-width="1"/>
 
   <!-- Left CTA Button (Download FLUX) -->
-  <a href="https://github.com/shifatsrm09/FLUX/releases/latest" target="_blank" style="cursor: pointer;">
+  <a href="https://github.com/shifatsrm09/FLUX/releases/latest/download/FLUX-Setup.exe" target="_blank" style="cursor: pointer;">
     <rect class="btn-cta" x="0.5" y="0.5" width="150" height="48" fill="#5865F2"/>
     <text x="75.5" y="30" fill="#FFFFFF" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="14.5" font-weight="700" text-anchor="middle" letter-spacing="0.5">DOWNLOAD FLUX</text>
   </a>
@@ -18,6 +18,6 @@
   <!-- Vertical Divider (1px solid black) -->
   <line x1="151" y1="0" x2="151" y2="49" stroke="#000000" stroke-width="1"/>
 
-  <!-- Right Section: Total Downloads Counter -->
-  <text x="247.5" y="30" fill="#80868E" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="14" font-weight="600" text-anchor="middle" letter-spacing="0.3">TOTAL DOWNLOADS: 40</text>
+  <!-- Right Section: Real Live Total Downloads Counter -->
+  <text x="247.5" y="30" fill="#80868E" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="14" font-weight="600" text-anchor="middle" letter-spacing="0.3">TOTAL DOWNLOADS: 29</text>
 </svg>

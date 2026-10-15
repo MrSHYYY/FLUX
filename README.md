@@ -18,7 +18,9 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/shifatsrm09/FLUX/releases/download/v1.6.1/FLUX-1.6.1-Setup.exe" aria-label="Download FLUX setup installer"><img src="https://img.shields.io/badge/-DOWNLOAD%20FLUX-5865F2?style=for-the-badge" height="38" alt="Download FLUX"></a><a href="https://github.com/shifatsrm09/FLUX/releases" aria-label="View releases"><img src="https://img.shields.io/github/downloads/shifatsrm09/FLUX/total?label=TOTAL%20DOWNLOADS:&amp;style=for-the-badge&amp;color=313338&amp;labelColor=313338" height="38" alt="Total Downloads"></a>
+  <a href="https://github.com/shifatsrm09/FLUX/releases/latest/download/FLUX-Setup.exe" aria-label="Download FLUX setup installer">
+    <img src="resources/download-button.svg" alt="Download FLUX" width="344" height="49">
+  </a>
 </p>
 
 <p align="center">
