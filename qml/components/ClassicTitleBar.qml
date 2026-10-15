@@ -113,8 +113,8 @@ Item {
         opacity: (root.solid || root.overlayMode) ? 0.0 : 1.0
 
         gradient: Gradient {
-            GradientStop { position: 0.0; color: "#E60A0A0D" }
-            GradientStop { position: 1.0; color: "#000A0A0D" }
+            GradientStop { position: 0.0; color: "#E61E1F22" }
+            GradientStop { position: 1.0; color: "#001E1F22" }
         }
 
         Behavior on opacity { NumberAnimation { duration: 240 } }
@@ -123,7 +123,7 @@ Item {
     // Solid bar with hairline
     Rectangle {
         anchors.fill: parent
-        color: "#F20A0A0D"
+        color: "#F21E1F22"
         opacity: (root.solid && !root.overlayMode) ? 1.0 : 0.0
 
         Behavior on opacity { NumberAnimation { duration: 240 } }
@@ -179,7 +179,7 @@ Item {
                 id: logoText
                 anchors.centerIn: parent
                 text: "FLUX"
-                color: logoMouse.containsMouse ? Theme.accentHover : Theme.accent
+                color: logoMouse.containsMouse ? Theme.accent : "#FFFFFF"
                 font.pixelSize: 26
                 font.weight: Font.Black
                 font.letterSpacing: 4
@@ -405,7 +405,7 @@ Item {
             implicitHeight: 24
             implicitWidth: nowPlayingRow.implicitWidth + 18
             radius: 12
-            color: nowPlayingMouse.containsMouse ? "#40E50914" : Theme.accentSoft
+            color: nowPlayingMouse.containsMouse ? "#405865F2" : Theme.accentSoft
             border.width: 1
             border.color: Theme.accentRing
 

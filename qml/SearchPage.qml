@@ -267,9 +267,9 @@ Item {
                     anchors.horizontalCenter: parent.horizontalCenter
                     y: continueList.count > 0 ? 16 : (root.topInset + 36)
                     radius: 31
-                    color: "#D915151A"
+                    color: "#E62B2D31"
                     border.width: initialInput.activeFocus ? 2 : 1
-                    border.color: initialInput.activeFocus ? Theme.accent : "#38FFFFFF"
+                    border.color: initialInput.activeFocus ? Theme.accent : "#3F4147"
 
                     Behavior on border.color { ColorAnimation { duration: 180 } }
 

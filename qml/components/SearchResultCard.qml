@@ -562,7 +562,7 @@ Item {
         width: 26
         height: 26
         radius: 13
-        color: removeMouse.containsMouse ? "#E6E50914" : "#B3000000"
+        color: removeMouse.containsMouse ? Theme.danger : "#B3000000"
         border.width: 1
         border.color: "#40FFFFFF"
         opacity: root.hovered ? 1.0 : 0.0

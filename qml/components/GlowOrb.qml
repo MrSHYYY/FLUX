@@ -1,11 +1,12 @@
 import QtQuick
+import "Theme.js" as Theme
 
 // Soft radial glow built from stacked translucent discs (no shader effects
 // needed, so it works with the plain Qt Quick runtime).
 Item {
     id: root
 
-    property color color: "#E50914"
+    property color color: Theme.accent
     property real strength: 0.2
     property int layers: 18
 

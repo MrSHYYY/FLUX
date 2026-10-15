@@ -46,7 +46,7 @@ Item {
                 radius: width / 2
                 x: root.width * 0.68
                 y: root.height * 0.42
-                color: "#1AE50914"
+                color: "#265865F2"
             }
 
             Rectangle {
@@ -98,7 +98,7 @@ Item {
                     y: root.height * 0.42 - height / 2
                     color: "transparent"
                     border.width: 1
-                    border.color: index === 0 ? "#33E50914" : "#16FFFFFF"
+                    border.color: index === 0 ? "#4D5865F2" : "#16FFFFFF"
                 }
             }
         }
@@ -149,7 +149,7 @@ Item {
                 x: root.width * 0.70
                 width: 2
                 height: root.height
-                color: "#4DE50914"
+                color: "#665865F2"
             }
 
             Rectangle {
@@ -176,7 +176,7 @@ Item {
                     radius: 2
                     x: root.width * 0.58 + (index % 6) * 17
                     y: 18 + Math.floor(index / 6) * 17
-                    color: ((index % 7) === 0) ? "#59E50914" : "#1AFFFFFF"
+                    color: ((index % 7) === 0) ? "#665865F2" : "#1AFFFFFF"
                 }
             }
         }

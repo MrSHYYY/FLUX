@@ -221,7 +221,7 @@ Popup {
                                 Layout.fillWidth: true
                                 implicitHeight: 46
                                 radius: 10
-                                color: (fluxUser && fluxUser.activeServer === 1) ? Theme.accent : Theme.bg
+                                color: (fluxUser && fluxUser.activeServer === 1) ? Theme.accent : Theme.surface
                                 border.width: 1
                                 border.color: (fluxUser && fluxUser.activeServer === 1) ? Theme.accent : Theme.border
 
@@ -256,7 +256,7 @@ Popup {
                                 Layout.fillWidth: true
                                 implicitHeight: 46
                                 radius: 10
-                                color: (fluxUser && fluxUser.activeServer === 2) ? Theme.accent : Theme.bg
+                                color: (fluxUser && fluxUser.activeServer === 2) ? Theme.accent : Theme.surface
                                 border.width: 1
                                 border.color: (fluxUser && fluxUser.activeServer === 2) ? Theme.accent : Theme.border
 

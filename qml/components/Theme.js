@@ -5,31 +5,31 @@
 // Imported everywhere as:  import "Theme.js" as Theme   (or "components/Theme.js")
 // ============================================================================
 
-// ---- Brand -----------------------------------------------------------------
-var accent        = "#E50914"
-var accentHover   = "#F6121D"
-var accentPressed = "#B20710"
-var accentSoft    = "#26E50914"   // 15% accent wash
-var accentRing    = "#80E50914"   // 50% accent for borders
+// ---- Brand (Discord Blurple) ------------------------------------------------
+var accent        = "#5865F2"
+var accentHover   = "#4752C4"
+var accentPressed = "#3C45A5"
+var accentSoft    = "#265865F2"   // 15% blurple wash
+var accentRing    = "#805865F2"   // 50% blurple for borders
 
-// ---- Surfaces (near-black, cinematic) ---------------------------------------
-var bg         = "#0A0A0D"
-var bgRaised   = "#0F0F13"
-var surface    = "#15151A"
-var surfaceHi  = "#1C1C23"
-var surfaceTop = "#25252E"
-var border     = "#23232B"
-var borderHi   = "#363641"
+// ---- Surfaces (Discord Dark Theme) ------------------------------------------
+var bg         = "#1E1F22"        // Discord window base / titlebar
+var bgRaised   = "#2B2D31"        // Discord sidebar / panels
+var surface    = "#313338"        // Discord main content / cards
+var surfaceHi  = "#383A40"        // Discord card hover / active item
+var surfaceTop = "#404249"        // Discord elevated badges / popups
+var border     = "#2B2D31"        // Discord subtle panel border
+var borderHi   = "#4E5058"        // Discord active / focused border
 
-// ---- Text --------------------------------------------------------------------
-var text     = "#F5F5F7"
-var textDim  = "#A9A9B6"
-var textMute = "#6C6C7A"
+// ---- Text (Discord Typography) ----------------------------------------------
+var text     = "#F2F3F5"          // Discord header & primary text
+var textDim  = "#949BA4"          // Discord secondary & channel text
+var textMute = "#80848E"          // Discord muted & placeholder text
 
-// ---- Status ------------------------------------------------------------------
-var success = "#46D369"
-var warning = "#F5B83D"
-var danger  = "#FF5D5D"
+// ---- Status (Discord Status Colors) -----------------------------------------
+var success = "#23A55A"          // Discord online green
+var warning = "#F0B232"          // Discord idle yellow
+var danger  = "#F23F43"          // Discord DND / error red
 
 // ---- Typography --------------------------------------------------------------
 var fontFamily = "Segoe UI"

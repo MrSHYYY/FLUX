@@ -15,7 +15,7 @@ Item {
     Rectangle {
         anchors.fill: parent
         radius: height / 2
-        color: root.checked ? Theme.accent : "#38FFFFFF"
+        color: root.checked ? Theme.accent : "#4E5058"
 
         Behavior on color { ColorAnimation { duration: 180 } }
 
