@@ -433,6 +433,16 @@ void UserStore::setAutoplayNext(bool enabled) {
     emit autoplayNextChanged();
 }
 
+bool UserStore::topPicksFirst() const {
+    return m_settings.value(QStringLiteral("ui/topPicksFirst"), true).toBool();
+}
+
+void UserStore::setTopPicksFirst(bool first) {
+    if (topPicksFirst() == first) return;
+    setValue(QStringLiteral("ui/topPicksFirst"), first);
+    emit topPicksFirstChanged();
+}
+
 int UserStore::activeServer() const {
     return m_settings.value(QStringLiteral("server/activeServer"), 2).toInt();
 }

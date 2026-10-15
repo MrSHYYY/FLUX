@@ -563,6 +563,19 @@ Rectangle {
                 spacing: 10
 
                 FluxButton {
+                    visible: !!(window && window.currentAltUrl && window.currentAltUrl.length > 0)
+                    text: "Try Alternative Server"
+                    iconName: "play"
+                    iconSize: 18
+
+                    onClicked: {
+                        var alt = window.currentAltUrl
+                        window.currentAltUrl = ""
+                        window.playMedia(alt, window.currentPlayingTitle)
+                    }
+                }
+
+                FluxButton {
                     text: "Try again"
                     iconName: "refresh"
                     iconSize: 18

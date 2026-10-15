@@ -10,7 +10,7 @@ Item {
     // Space reserved at the top for the overlaid nav bar
     property real topInset: 0
 
-    signal playMediaRequested(string url, string title)
+    signal playMediaRequested(string url, string title, string altUrl)
 
     function watchedTimeLabel(milliseconds) {
         var totalSeconds = Math.floor(milliseconds / 1000)
@@ -48,6 +48,7 @@ Item {
     property bool bookmarksOpen: false
     property bool searchOpen: false
     property bool showAllTrending: false
+    property bool showAllTopPicks: false
 
     // Exactly one of the four views is shown at a time
     readonly property bool showBookmarks: root.bookmarksOpen && !root.browsing
@@ -120,21 +121,26 @@ Item {
 
         ScrollBar.vertical: FluxScrollBar { }
 
-        Column {
+        Item {
             id: homeColumn
             width: homeFlick.width
-            spacing: 0
+            implicitHeight: (continueSection.visible ? continueSection.height : 0)
+                            + (trendingSection.visible ? trendingSection.height : 0)
+                            + topPicksSection.height
+                            + 48
 
             readonly property real availableWidth: Math.max(300, width - root.pageMargin * 2)
             readonly property int targetCardW: 172
             readonly property int cols: Math.max(2, Math.floor((availableWidth + 14) / (targetCardW + 14)))
             readonly property real cardW: Math.floor((availableWidth - (cols - 1) * 14) / cols)
             readonly property real cardH: Math.round(cardW * 1.5)
+            readonly property real continueOffset: continueSection.visible ? continueSection.height : 0
 
             // ---- Continue Watching -------------------------------------------------------
             Item {
                 id: continueSection
 
+                y: 0
                 width: homeColumn.width
                 height: continueList.count > 0 ? (root.topInset + 16 + continueHeader.height + 6 + continueList.height + 24) : 0
                 visible: continueList.count > 0
@@ -259,8 +265,20 @@ Item {
                 id: trendingSection
 
                 width: homeColumn.width
-                height: trendingLayout.y + trendingLayout.implicitHeight + 40
+                visible: !!fluxSearch && fluxSearch.trending && fluxSearch.trending.length > 0
+                height: visible ? (trendingLayout.y + trendingLayout.implicitHeight + 40) : 0
                 implicitHeight: height
+
+                y: {
+                    if (fluxUser && fluxUser.topPicksFirst) {
+                        return homeColumn.continueOffset + topPicksSection.height
+                    } else {
+                        return homeColumn.continueOffset
+                    }
+                }
+                Behavior on y {
+                    NumberAnimation { duration: 320; easing.type: Easing.OutCubic }
+                }
 
                 readonly property real availableWidth: homeColumn.availableWidth
                 readonly property int trendingCols: homeColumn.cols
@@ -270,7 +288,11 @@ Item {
                 ColumnLayout {
                     id: trendingLayout
                     x: root.pageMargin
-                    y: continueList.count > 0 ? 20 : (root.topInset + 16)
+                    y: {
+                        if (continueList.count > 0) return 20
+                        var isTop = !(fluxUser && fluxUser.topPicksFirst)
+                        return isTop ? (root.topInset + 16) : 20
+                    }
                     width: trendingSection.availableWidth
                     spacing: 16
 
@@ -314,6 +336,36 @@ Item {
                                 : ("Top " + Math.min(fluxSearch.trending.length, trendingSection.trendingCols * 2))
                             color: Theme.textDim
                             font.pixelSize: 12
+                        }
+
+                        // Swap icon button sharp right
+                        Rectangle {
+                            id: trendingSwapBtn
+                            width: 30
+                            height: 30
+                            radius: 8
+                            color: trendingSwapMouse.containsMouse ? Theme.surfaceHover : "transparent"
+                            border.width: 1
+                            border.color: trendingSwapMouse.containsMouse ? Theme.border : "transparent"
+
+                            FluxIcon {
+                                anchors.centerIn: parent
+                                name: "swap"
+                                size: 16
+                                color: trendingSwapMouse.containsMouse ? Theme.text : Theme.textDim
+                            }
+
+                            MouseArea {
+                                id: trendingSwapMouse
+                                anchors.fill: parent
+                                hoverEnabled: true
+                                cursorShape: Qt.PointingHandCursor
+                                onClicked: {
+                                    if (fluxUser) {
+                                        fluxUser.topPicksFirst = !fluxUser.topPicksFirst
+                                    }
+                                }
+                            }
                         }
                     }
 
@@ -447,13 +499,24 @@ Item {
                 }
             }
 
-            // ---- Top Picks (Dhaka Flix) ------------------------------------------------
+            // ---- Top Picks -------------------------------------------------------------
             Item {
                 id: topPicksSection
 
                 width: homeColumn.width
                 height: topPicksLayout.y + topPicksLayout.implicitHeight + 48
                 implicitHeight: height
+
+                y: {
+                    if (fluxUser && fluxUser.topPicksFirst) {
+                        return homeColumn.continueOffset
+                    } else {
+                        return homeColumn.continueOffset + (trendingSection.visible ? trendingSection.height : 0)
+                    }
+                }
+                Behavior on y {
+                    NumberAnimation { duration: 320; easing.type: Easing.OutCubic }
+                }
 
                 readonly property real availableWidth: homeColumn.availableWidth
                 readonly property int picksCols: homeColumn.cols
@@ -464,43 +527,176 @@ Item {
                     {
                         "title": "The Shawshank Redemption (1994) 1080p BluRay x265",
                         "url": "http://172.16.50.14/DHAKA-FLIX-14/English%20Movies%20%281080p%29/%281995%29%201080p%20%26%20Before/The%20Shawshank%20Redemption%20%281994%29%201080p/The%20Shawshank%20Redemption%20%281994%29%20RM4K%201080p%20BluRay%20x265%20HEVC%2010bit%20AAC%205.1%20ESub-afm72.mkv",
+                        "altUrl": "http://10.16.100.244/player.php?play=15765",
                         "posterUrl": "https://image.tmdb.org/t/p/w500/9cqNxx0GxF0bflZmeSMuL5tnGzr.jpg",
                         "extraInfo": "Top Pick"
                     },
                     {
                         "title": "The Batman (2022) 1080p BluRay x265",
                         "url": "http://172.16.50.14/DHAKA-FLIX-14/English%20Movies%20%281080p%29/%282022%29%201080p/The%20Batman%20%282022%29%201080p/The%20Batman%20%282022%29%201080p%20BluRay%20x265%20HEVC%2010bit%20AAC%207.1%20ESub-Pahe.mkv",
+                        "altUrl": "http://10.16.100.244/player.php?play=27914",
                         "posterUrl": "https://image.tmdb.org/t/p/w500/74xTEgt7R36Fpooo50r9T25onhq.jpg",
                         "extraInfo": "Top Pick"
                     },
                     {
                         "title": "Interstellar (2014) 1080p BluRay x265 Dual Audio",
                         "url": "http://172.16.50.14/DHAKA-FLIX-14/English%20Movies%20%281080p%29/%282014%29%201080p/Interstellar%20%282014%29%201080p%20%5BDual%20Audio%5D/Interstellar%20%282014%29%20IMAX%201080p%20BluRay%20x265%20HEVC%20ESub%20%5BDual%20Audio%5D%5BHindi%205.1%2BEnglish%205.1%5D%20-mkvC.mkv",
+                        "altUrl": "http://10.16.100.244/player.php?play=6139",
                         "posterUrl": "https://image.tmdb.org/t/p/w500/gEU2QniE6E77NI6lCU6MxlNBvIx.jpg",
                         "extraInfo": "Top Pick"
                     },
                     {
                         "title": "Spider-Man - Brand New Day (2026) 1080p AMZN Dual Audio",
                         "url": "http://172.16.50.14/DHAKA-FLIX-14/English%20Movies%20%281080p%29/%282026%29%201080p/Spider-Man%20-%20Brand%20New%20Day%20%282026%29%201080p%20AMZN%20%5BDual%20Audio%5D/Spider-Man%20Brand%20New%20Day%20%282026%29%20IMAX%201080p%20AMZN-WEB%20x265%20HEVC%20ESub%20%5BDual%20Audio%5D%5BHindi%205.1%2BEnglish%205.1%5D%20-HDHub.mkv",
+                        "altUrl": "http://10.16.100.244/player.php?play=45231",
                         "posterUrl": "https://image.tmdb.org/t/p/w500/bjiS5ipwxb9JFy3XRRN4OAilSeX.jpg",
                         "extraInfo": "Top Pick"
                     },
                     {
                         "title": "Shutter Island (2010) 720p BluRay x264 Dual Audio",
                         "url": "http://172.16.50.7/DHAKA-FLIX-7/English%20Movies/%282010%29/Shutter%20Island%20%282010%29%20720p%20%5BDual%20Audio%5D/Shutter%20Island%20%282010%29%20720p%20BluRay%20x264%20ESub%20%5BDual%20Audio%5D%5BHindi%205.1%2BEnglish%205.1%5D%20-%20mkvC.mkv",
+                        "altUrl": "http://10.16.100.244/player.php?play=2670",
                         "posterUrl": "https://image.tmdb.org/t/p/w500/nrmXQ0zcZUL8jFLrakWc90IR8z9.jpg",
                         "extraInfo": "Top Pick"
                     },
                     {
                         "title": "Fight Club (1999) 1080p BluRay x265",
                         "url": "http://172.16.50.14/DHAKA-FLIX-14/English%20Movies%20%281080p%29/%281999%29%201080p/Fight%20Club%20%281999%29%201080p/Fight%20Club%20%281999%29%20RM%201080p%20BluRay%20x265%20HEVC%2010bit%20AAC%207.1%20MSubs-Tigole.mkv",
+                        "altUrl": "http://10.16.100.244/player.php?play=15767",
                         "posterUrl": "https://image.tmdb.org/t/p/w500/pB8BM7pdSp6B6Ih7QZ4DrQ3PmJK.jpg",
                         "extraInfo": "Top Pick"
                     },
                     {
                         "title": "The Prestige (2006) 1080p BluRay x265",
                         "url": "http://172.16.50.14/DHAKA-FLIX-14/English%20Movies%20%281080p%29/%282006%29%201080p/The%20Prestige%20%282006%29%201080p/The%20Prestige%20%282006%29%201080p%20BluRay%20x265%20HEVC%2010bit%20AAC%205.1%20ESub-MkvCage.mkv",
+                        "altUrl": "http://10.16.100.244/player.php?play=2543",
                         "posterUrl": "https://image.tmdb.org/t/p/w500/Ag2B2KHKQPukjH7WutmgnnSNurZ.jpg",
+                        "extraInfo": "Top Pick"
+                    },
+                    {
+                        "title": "Inception (2010) 1080p BluRay HEVC",
+                        "url": "http://172.16.50.14/DHAKA-FLIX-14/English%20Movies%20%281080p%29/%282010%29%201080p/Inception%20%282010%29%201080p/Inception.2010.1080p.BluRay.10bit.HEVC.6CH.MkvCage.ws.mkv",
+                        "altUrl": "http://10.16.100.244/player.php?play=2626",
+                        "posterUrl": "https://image.tmdb.org/t/p/w500/s3TBrRGB1iav7gFOCNx3H31MoES.jpg",
+                        "extraInfo": "Top Pick"
+                    },
+                    {
+                        "title": "The Godfather (1972) 1080p BluRay x265",
+                        "url": "http://172.16.50.14/DHAKA-FLIX-14/English%20Movies%20%281080p%29/%281995%29%201080p%20%26%20Before/The%20Godfather-Part%20I%20%281972%29%201080p/The%20Godfather%20%281972%29%201080p%20BluRay%20x265%20HEVC%2010bit%20AAC%205.1%20ESub-afm72.mkv",
+                        "altUrl": "http://10.16.100.244/player.php?play=575",
+                        "posterUrl": "https://image.tmdb.org/t/p/w500/3bhkrj58Vtu7enYsRolD1fZdja1.jpg",
+                        "extraInfo": "Top Pick"
+                    },
+                    {
+                        "title": "The Dark Knight Rises (2012) 1080p BluRay x265",
+                        "url": "http://172.16.50.14/DHAKA-FLIX-14/English%20Movies%20%281080p%29/%282012%29%201080p/The%20Dark%20Knight%20Rises%20%282012%29%201080p/The%20Dark%20Knight%20Rises%20%282012%29%201080p%20BluRay%20x265%20HEVC%20AAC%20%205.1%20MSubs-Tigole.mkv",
+                        "altUrl": "http://10.16.100.244/player.php?play=1772",
+                        "posterUrl": "https://image.tmdb.org/t/p/w500/hr0L2aueqlP2BYUblTTjmtn0hw4.jpg",
+                        "extraInfo": "Top Pick"
+                    },
+                    {
+                        "title": "Avengers: Infinity War (2018) 1080p BluRay x265",
+                        "url": "http://172.16.50.14/DHAKA-FLIX-14/English%20Movies%20%281080p%29/%282018%29%201080p/Avengers-Infinity%20War%20%282018%29%201080p/Avengers-Infinity%20War%20%282018%29%201080p%20BluRay%20x265%20HEVC%2010bit%20AAC%207.1%20MSubs-Prof.mkv",
+                        "altUrl": "http://10.16.100.244/player.php?play=10529",
+                        "posterUrl": "https://image.tmdb.org/t/p/w500/7WsyChQLEftFiDOVTGkv3hFpyyt.jpg",
+                        "extraInfo": "Top Pick"
+                    },
+                    {
+                        "title": "Spider-Man: Into the Spider-Verse (2018) 1080p BluRay Dual Audio",
+                        "url": "http://172.16.50.14/DHAKA-FLIX-14/Animation%20Movies%20%281080p%29/Spider-Man%20-%20Into%20the%20Spider-Verse%20%282018%29%201080p%20%5BDual%20Audio%5D/Spider-Man%20Into%20the%20Spider-Verse%20%282018%29%201080p%20BluRay%20x264%20ESub%20%5BDual%20Audio%5D%5BHindi%205.1%2BEnglish%205.1%5D%20-ExtraM.mkv",
+                        "altUrl": "http://10.16.100.244/player.php?play=12533",
+                        "posterUrl": "https://image.tmdb.org/t/p/w500/iiZZdoQBEYBv6id8su7ImL0oCbD.jpg",
+                        "extraInfo": "Top Pick"
+                    },
+                    {
+                        "title": "Spider-Man: Across the Spider-Verse (2023) 1080p BluRay x265 Dual Audio",
+                        "url": "http://172.16.50.14/DHAKA-FLIX-14/Animation%20Movies%20%281080p%29/Spider-Man%20-%20Across%20the%20Spider-Verse%20%282023%29%201080p%20%5BDual%20Audio%5D/Spider-Man%20Across%20the%20Spider-Verse%20%282023%29%201080p%20BluRay%20x265%20HEVC%20ESub%20%5BDual%20Audio%5D%5BHindi%205.1%2BEnglish%205.1%5D%20-mkvC.mkv",
+                        "altUrl": "http://10.16.100.244/player.php?play=31909",
+                        "posterUrl": "https://image.tmdb.org/t/p/w500/8Vt6mWEReuy4Of61Lnj5Xj704m8.jpg",
+                        "extraInfo": "Top Pick"
+                    },
+                    {
+                        "title": "Oppenheimer (2023) 1080p BluRay x265 Dual Audio",
+                        "url": "http://172.16.50.14/DHAKA-FLIX-14/English%20Movies%20%281080p%29/%282023%29%201080p/Oppenheimer%20%282023%29%201080p%20%5BDual%20Audio%5D/Oppenheimer%20%282023%29%20IMAX%201080p%20BluRay%20x265%20HEVC%20ESub%20%5BDual%20Audio%5D%5BHindi%205.1%2BEnglish%205.1%5D%20-mkvC.mkv",
+                        "altUrl": "http://10.16.100.244/player.php?play=32662",
+                        "posterUrl": "https://image.tmdb.org/t/p/w500/8Gxv8gSFCU0XGDykEGv7zR1n2ua.jpg",
+                        "extraInfo": "Top Pick"
+                    },
+                    {
+                        "title": "The Usual Suspects (1995) 1080p BluRay HEVC",
+                        "url": "http://172.16.50.14/DHAKA-FLIX-14/English%20Movies%20%281080p%29/%281995%29%201080p%20%26%20Before/The%20Usual%20Suspects%20%281995%29%201080p/The.Usual.Suspects.1995.1080p.BluRay.10bit.HEVC.6CH.MkvCage.ws.mkv",
+                        "altUrl": "http://10.16.100.244/player.php?play=6203",
+                        "posterUrl": "https://image.tmdb.org/t/p/w500/bUPmtQzrRhzqYySeiMpv7GurAfm.jpg",
+                        "extraInfo": "Top Pick"
+                    },
+                    {
+                        "title": "Your Name (2016) 1080p BluRay x265 Multi Audio",
+                        "url": "http://172.16.50.14/DHAKA-FLIX-14/Animation%20Movies%20%281080p%29/Your%20Name%20%282016%29%201080p%20%5BMulti%20Audio%5D/Your%20Name%20%282016%29%201080p%20BluRay%20x265%20HEVC%20ESub%20%5BMulti%20Audio%5D%5BHindi%202.0%2BHindi%205.1%2BEnglish%205.1%2BJapanese%205.1%5D%20-TW4all.mkv",
+                        "altUrl": "http://10.16.100.244/player.php?play=9639",
+                        "posterUrl": "https://image.tmdb.org/t/p/w500/yLglTwyFOUZt5fNKm0PWL1PK5gm.jpg",
+                        "extraInfo": "Top Pick"
+                    },
+                    {
+                        "title": "12th Fail (2023) 1080p DSNP WEBRip x264",
+                        "url": "http://172.16.50.14/DHAKA-FLIX-14/Hindi%20Movies/%282023%29/12th%20Fail%20%282023%29%201080p/12th%20Fail%20%282023%29%20Hindi%201080p%20DSNP%20WEBRip%20x264%20DD5.1%20ESub%20-%20mkvCinemas.mkv",
+                        "altUrl": "http://10.16.100.244/player.php?play=34596",
+                        "posterUrl": "https://image.tmdb.org/t/p/w500/hm4ou83RwLVwNj3HsmQuqC1qkWy.jpg",
+                        "extraInfo": "Top Pick"
+                    },
+                    {
+                        "title": "Cyberpunk: Edgerunners S01E01 1080p NF WEBRip x265",
+                        "url": "http://172.16.50.10/DHAKA-FLIX-10/Anime%20%26%20Cartoon%20TV%20Series/Anime-TV%20Series%20%E2%99%A5%20%20A%20%20%E2%80%94%20%20F/Cyberpunk-Edgerunners%20%28TV%20Cartoon%202022%E2%80%93%20%29%201080p%20%5BDual%20Audio%5D/Season%201/%5BRapta%5D%20Cyberpunk%20Edgerunners%20-%20S01E01%20%5BDual%20Audio%5D%5B1080p%20NF%20WEBRip%20x265%20HEVC%2010bit%20DD5.1%20MSubs%5D.mkv",
+                        "altUrl": "http://10.16.100.244/player.php?play=45538",
+                        "posterUrl": "https://image.tmdb.org/t/p/w500/lqcDVZ8pyk08AVftMBildDR3QUK.jpg",
+                        "extraInfo": "Series"
+                    },
+                    {
+                        "title": "American Psycho (2000) 1080p BluRay x265",
+                        "url": "http://172.16.50.14/DHAKA-FLIX-14/English%20Movies%20%281080p%29/%282000%29%201080p/American%20Psycho%20%282000%29%201080p/American%20Psycho%20%282000%29%201080p%20BluRay%20x265%20HEVC%2010bit%20AAC%205.1%20ESub-Vyndros.mkv",
+                        "altUrl": "",
+                        "posterUrl": "https://image.tmdb.org/t/p/w500/tlo3T0xxZRJZiDUgM6KF84q2dI4.jpg",
+                        "extraInfo": "Top Pick"
+                    },
+                    {
+                        "title": "Memento (2000) 720p BluRay x264 Dual Audio",
+                        "url": "http://172.16.50.7/DHAKA-FLIX-7/English%20Movies/%282000%29/Memento%20%282000%29%20720p%20%5BDual%20Audio%5D/Memento%20%282000%29%20RM%20720p%20BluRay%20x264%20ESub%20%5BDual%20Audio%5D%5BHindi%202.0%2BEnglish%205.1%5D%20-mkvC.mkv",
+                        "altUrl": "http://10.16.100.244/player.php?play=6534",
+                        "posterUrl": "https://image.tmdb.org/t/p/w500/yuNs09hvpHVU1cBTCAk9zxsL2oW.jpg",
+                        "extraInfo": "Top Pick"
+                    },
+                    {
+                        "title": "No Country for Old Men (2007) 1080p BluRay x265 Dual Audio",
+                        "url": "http://172.16.50.14/DHAKA-FLIX-14/English%20Movies%20%281080p%29/%282007%29%201080p/No%20Country%20for%20Old%20Men%20%282007%29%201080p%20%5BDual%20Audio%5D/No%20Country%20for%20Old%20Men%20%282007%29%201080p%20BluRay%20x265%20HEVC%20ESub%20%5BDual%20Audio%5D%5BHindi%205.1%2BEnglish%205.1%5D%20-mkvC.mkv",
+                        "altUrl": "http://10.16.100.244/player.php?play=14659",
+                        "posterUrl": "https://image.tmdb.org/t/p/w500/6d5XOczc226jECq0LIX0siKtgHR.jpg",
+                        "extraInfo": "Top Pick"
+                    },
+                    {
+                        "title": "Passengers (2016) 1080p BluRay 6CH",
+                        "url": "http://172.16.50.14/DHAKA-FLIX-14/English%20Movies%20%281080p%29/%282016%29%201080p/Passengers%20%282016%29%201080p/Passengers.2016.1080p.BluRay.6CH.ShAaNiG.mkv",
+                        "altUrl": "http://10.16.100.244/player.php?play=8230",
+                        "posterUrl": "https://image.tmdb.org/t/p/w500/n5DpXC4ZxH4dnydcz7qav9iA4U.jpg",
+                        "extraInfo": "Top Pick"
+                    },
+                    {
+                        "title": "Gravity (2013) 1080p BluRay x265",
+                        "url": "http://172.16.50.14/DHAKA-FLIX-14/English%20Movies%20%281080p%29/%282013%29%201080p/Gravity%20%282013%29%20SE%201080p%20BluRay%20x265%20HEVC%2010bit%20AAC%205.1%20MSubs-Silence.mkv",
+                        "altUrl": "http://10.16.100.244/player.php?play=472",
+                        "posterUrl": "https://image.tmdb.org/t/p/w500/kZ2nZw8D681aphje8NJi8EfbL1U.jpg",
+                        "extraInfo": "Top Pick"
+                    },
+                    {
+                        "title": "The Martian (2015) 1080p BluRay x265 Extended",
+                        "url": "http://172.16.50.14/DHAKA-FLIX-14/English%20Movies%20%281080p%29/%282015%29%201080p/The%20Martian%20%282015%29%20Extended%201080p%20BluRay%20x265%20HEVC%2010bit%20AAC%207.1%20MSubs-Tigole.mkv",
+                        "altUrl": "http://10.16.100.244/player.php?play=8894",
+                        "posterUrl": "https://image.tmdb.org/t/p/w500/5BHuvQ6p9kfc091Z8RiFNhCwL4b.jpg",
+                        "extraInfo": "Top Pick"
+                    },
+                    {
+                        "title": "Catch Me If You Can (2002) 1080p BluRay x265",
+                        "url": "http://172.16.50.14/DHAKA-FLIX-14/English%20Movies%20%281080p%29/%282002%29%201080p/Catch%20Me%20If%20You%20Can%20%282002%29%201080p/Catch%20Me%20If%20You%20Can%20%282002%29%201080p%20BluRay%20x265%20HEVC%2010bit%20AAC%205.1%20ESub-pav69.mkv",
+                        "altUrl": "http://10.16.100.244/player.php?play=6",
+                        "posterUrl": "https://image.tmdb.org/t/p/w500/ggC3Brchf4RqPitEh7cROFoeAWn.jpg",
                         "extraInfo": "Top Pick"
                     }
                 ]
@@ -509,6 +705,9 @@ Item {
                     if (fluxUser) {
                         for (var i = 0; i < topPicksList.length; ++i) {
                             fluxUser.rememberPoster(topPicksList[i].url, topPicksList[i].posterUrl, topPicksList[i].title)
+                            if (topPicksList[i].altUrl && topPicksList[i].altUrl.length > 0) {
+                                fluxUser.rememberPoster(topPicksList[i].altUrl, topPicksList[i].posterUrl, topPicksList[i].title)
+                            }
                         }
                     }
                 }
@@ -516,7 +715,11 @@ Item {
                 ColumnLayout {
                     id: topPicksLayout
                     x: root.pageMargin
-                    y: 10
+                    y: {
+                        if (continueList.count > 0) return 20
+                        var isTop = (fluxUser && fluxUser.topPicksFirst) || (!trendingSection.visible)
+                        return isTop ? (root.topInset + 16) : 20
+                    }
                     width: topPicksSection.availableWidth
                     spacing: 16
 
@@ -544,7 +747,7 @@ Item {
                             Text {
                                 id: topPicksBadgeText
                                 anchors.centerIn: parent
-                                text: "Dhaka Flix"
+                                text: (fluxUser && fluxUser.activeServer === 2) ? "ICC FTP" : "Dhaka Flix"
                                 color: Theme.accent
                                 font.pixelSize: 11
                                 font.weight: Font.Bold
@@ -554,13 +757,46 @@ Item {
                         Item { Layout.fillWidth: true }
 
                         Text {
-                            text: topPicksSection.topPicksList.length + " classics"
+                            text: root.showAllTopPicks
+                                ? ("Showing all " + topPicksSection.topPicksList.length)
+                                : ("Top " + Math.min(topPicksSection.topPicksList.length, topPicksSection.picksCols * 2) + " of " + topPicksSection.topPicksList.length)
                             color: Theme.textDim
                             font.pixelSize: 12
                         }
+
+                        // Swap icon button sharp right (visible only when trendingSection is visible)
+                        Rectangle {
+                            id: topPicksSwapBtn
+                            width: 30
+                            height: 30
+                            radius: 8
+                            visible: trendingSection.visible
+                            color: topPicksSwapMouse.containsMouse ? Theme.surfaceHover : "transparent"
+                            border.width: 1
+                            border.color: topPicksSwapMouse.containsMouse ? Theme.border : "transparent"
+
+                            FluxIcon {
+                                anchors.centerIn: parent
+                                name: "swap"
+                                size: 16
+                                color: topPicksSwapMouse.containsMouse ? Theme.text : Theme.textDim
+                            }
+
+                            MouseArea {
+                                id: topPicksSwapMouse
+                                anchors.fill: parent
+                                hoverEnabled: true
+                                cursorShape: Qt.PointingHandCursor
+                                onClicked: {
+                                    if (fluxUser) {
+                                        fluxUser.topPicksFirst = !fluxUser.topPicksFirst
+                                    }
+                                }
+                            }
+                        }
                     }
 
-                    // Grid of cards
+                    // Grid of cards (showing 2 rows by default or all when expanded)
                     Grid {
                         id: topPicksGrid
                         Layout.fillWidth: true
@@ -569,37 +805,101 @@ Item {
                         rowSpacing: 14
 
                         Repeater {
-                            model: topPicksSection.topPicksList
+                            model: {
+                                if (!root.showAllTopPicks) {
+                                    return topPicksSection.topPicksList.slice(0, Math.min(topPicksSection.topPicksList.length, topPicksSection.picksCols * 2))
+                                }
+                                return topPicksSection.topPicksList
+                            }
 
                             delegate: SearchResultCard {
                                 required property var modelData
                                 required property int index
 
+                                readonly property bool preferIcc: (fluxUser && fluxUser.activeServer === 2 && modelData.altUrl && modelData.altUrl.length > 0)
+                                readonly property string effectiveUrl: preferIcc ? modelData.altUrl : modelData.url
+                                readonly property string fallbackUrl: preferIcc ? modelData.url : (modelData.altUrl || "")
+
                                 width: topPicksSection.picksCardW
                                 height: topPicksSection.picksCardH
                                 title: modelData.title
-                                playUrl: modelData.url
+                                playUrl: effectiveUrl
                                 posterUrl: modelData.posterUrl || ""
                                 isFolder: false
-                                libraryName: "DHAKA FLIX"
+                                libraryName: preferIcc ? "ICC FTP" : "DHAKA FLIX"
                                 progress: 0
                                 showRemove: false
                                 extraInfo: modelData.extraInfo || "Top Pick"
-                                introDelay: Math.min(index, 7) * 35
+                                introDelay: Math.min(index, 12) * 30
 
-                                onPlayRequested: function(url, itemTitle) {
-                                    root.playMediaRequested(url, itemTitle)
+                                onPlayRequested: function(targetUrl, itemTitle) {
+                                    root.playMediaRequested(targetUrl, itemTitle, fallbackUrl)
                                 }
 
                                 onFolderRequested: function(url, libName) {
                                     if (fluxBrowser) fluxBrowser.open(url, libName, "")
                                 }
 
-                                onDownloadRequested: function(url, itemTitle, isPack) {
-                                    root.startDownload(url, itemTitle, isPack)
+                                onDownloadRequested: function(targetUrl, itemTitle, isPack) {
+                                    root.startDownload(targetUrl, itemTitle, isPack)
                                 }
                             }
                         }
+                    }
+
+                    // "Show More" / "Show Less" button
+                    RowLayout {
+                        Layout.fillWidth: true
+                        Layout.topMargin: 8
+                        Layout.bottomMargin: 32
+                        visible: topPicksSection.topPicksList.length > topPicksSection.picksCols * 2
+
+                        Item { Layout.fillWidth: true }
+
+                        Rectangle {
+                            id: showMoreTopPicksBtn
+                            implicitHeight: 40
+                            implicitWidth: showMoreTopPicksRow.implicitWidth + 36
+                            radius: 20
+                            color: showMoreTopPicksMouse.containsMouse ? Theme.surfaceHi : Theme.surface
+                            border.width: 1
+                            border.color: showMoreTopPicksMouse.containsMouse ? Theme.accent : Theme.border
+
+                            Behavior on color { ColorAnimation { duration: 120 } }
+                            Behavior on border.color { ColorAnimation { duration: 120 } }
+
+                            RowLayout {
+                                id: showMoreTopPicksRow
+                                anchors.centerIn: parent
+                                spacing: 8
+
+                                Text {
+                                    text: root.showAllTopPicks ? "Show Less" : ("Show More (" + (topPicksSection.topPicksList.length - topPicksSection.picksCols * 2) + " more)")
+                                    color: showMoreTopPicksMouse.containsMouse ? "#FFFFFF" : Theme.text
+                                    font.pixelSize: 13
+                                    font.weight: Font.DemiBold
+                                }
+
+                                FluxIcon {
+                                    name: root.showAllTopPicks ? "chevronUp" : "chevronDown"
+                                    size: 14
+                                    color: showMoreTopPicksMouse.containsMouse ? Theme.accent : Theme.textDim
+                                    Layout.alignment: Qt.AlignVCenter
+                                }
+                            }
+
+                            MouseArea {
+                                id: showMoreTopPicksMouse
+                                anchors.fill: parent
+                                hoverEnabled: true
+                                cursorShape: Qt.PointingHandCursor
+                                onClicked: {
+                                    root.showAllTopPicks = !root.showAllTopPicks
+                                }
+                            }
+                        }
+
+                        Item { Layout.fillWidth: true }
                     }
                 }
             }

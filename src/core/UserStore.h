@@ -25,6 +25,7 @@ class UserStore : public QObject {
     Q_PROPERTY(int revision READ revision NOTIFY historyChanged)
     Q_PROPERTY(QVariantList continueWatching READ continueWatching NOTIFY historyChanged)
     Q_PROPERTY(bool autoplayNext READ autoplayNext WRITE setAutoplayNext NOTIFY autoplayNextChanged)
+    Q_PROPERTY(bool topPicksFirst READ topPicksFirst WRITE setTopPicksFirst NOTIFY topPicksFirstChanged)
     Q_PROPERTY(int activeServer READ activeServer WRITE setActiveServer NOTIFY serverChanged)
     Q_PROPERTY(QString iccftpUrl READ iccftpUrl WRITE setIccftpUrl NOTIFY serverChanged)
     Q_PROPERTY(QString iccftpSession READ iccftpSession WRITE setIccftpSession NOTIFY serverChanged)
@@ -42,6 +43,8 @@ public:
     QVariantList continueWatching() const;
     bool autoplayNext() const;
     void setAutoplayNext(bool enabled);
+    bool topPicksFirst() const;
+    Q_INVOKABLE void setTopPicksFirst(bool first);
 
     // ---- Media Server (1 = Dhaka Flix, 2 = ICC FTP) ----
     // The setters are Q_INVOKABLE so QML can call them as methods as well as assign the properties
@@ -85,6 +88,7 @@ public:
 signals:
     void historyChanged();
     void autoplayNextChanged();
+    void topPicksFirstChanged();
     void serverChanged();
     void postersChanged();
 

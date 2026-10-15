@@ -155,7 +155,10 @@ ApplicationWindow {
         return false
     }
 
-    function playMedia(url, title) {
+    property string currentAltUrl: ""
+
+    function playMedia(url, title, altUrl) {
+        currentAltUrl = (altUrl && altUrl.length > 0) ? altUrl : ""
         if (url && url.indexOf("player.php") !== -1 && fluxSearch) {
             fluxSearch.resolvePlayUrl(url, function(directUrl) {
                 playResolvedMedia(url, (directUrl && directUrl.length > 0) ? directUrl : url, title)
@@ -553,8 +556,8 @@ ApplicationWindow {
 
             Behavior on opacity { NumberAnimation { duration: 220; easing.type: Easing.OutCubic } }
 
-            onPlayMediaRequested: function(url, title) {
-                window.playMedia(url, title)
+            onPlayMediaRequested: function(url, title, altUrl) {
+                window.playMedia(url, title, altUrl)
             }
         }
 

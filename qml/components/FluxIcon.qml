@@ -287,6 +287,18 @@ Item {
             poly(ctx, [16.5, 15, 20.5, 17.5, 16.5, 20], true)
             ctx.fill()
             break
+
+        case "swap":
+            // Two vertical arrows pointing in opposite directions
+            poly(ctx, [7.5, 6, 7.5, 18], false)
+            ctx.stroke()
+            poly(ctx, [4.5, 9.5, 7.5, 6, 10.5, 9.5], false)
+            ctx.stroke()
+            poly(ctx, [16.5, 6, 16.5, 18], false)
+            ctx.stroke()
+            poly(ctx, [13.5, 14.5, 16.5, 18, 19.5, 14.5], false)
+            ctx.stroke()
+            break
         }
     }
 
