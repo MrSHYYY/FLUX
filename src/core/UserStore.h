@@ -2,7 +2,9 @@
 
 #include <QObject>
 #include <QHash>
+#include <QList>
 #include <QPointer>
+#include <QSet>
 #include <QSettings>
 #include <QString>
 #include <QTimer>
@@ -10,6 +12,7 @@
 #include <QVariantList>
 #include <QVariantMap>
 #include <QJSValue>
+class QNetworkAccessManager;
 
 namespace Flux {
 
@@ -31,6 +34,8 @@ class UserStore : public QObject {
     Q_PROPERTY(QString iccftpSession READ iccftpSession WRITE setIccftpSession NOTIFY serverChanged)
     // Bumps when a poster is remembered; QML bindings read it to pick up new posters
     Q_PROPERTY(int posterRevision READ posterRevision NOTIFY postersChanged)
+    Q_PROPERTY(bool autoFetchPosters READ autoFetchPosters WRITE setAutoFetchPosters NOTIFY autoFetchPostersChanged)
+    Q_PROPERTY(QString tmdbApiKey READ tmdbApiKey WRITE setTmdbApiKey NOTIFY tmdbApiKeyChanged)
 
 public:
     explicit UserStore(QObject *parent = nullptr);
@@ -82,6 +87,14 @@ public:
     Q_INVOKABLE void markWatched(const QString &url, bool watched);
     Q_INVOKABLE void clearHistory();
 
+    bool autoFetchPosters() const;
+    Q_INVOKABLE void setAutoFetchPosters(bool enabled);
+    QString tmdbApiKey() const;
+    Q_INVOKABLE void setTmdbApiKey(const QString &key);
+
+    Q_INVOKABLE void fetchPoster(const QString &url, const QString &title = QString(), bool isFolder = false);
+    Q_INVOKABLE void clearPosters();
+
     // Called on application exit
     Q_INVOKABLE void shutdown();
 
@@ -91,8 +104,19 @@ signals:
     void topPicksFirstChanged();
     void serverChanged();
     void postersChanged();
+    void autoFetchPostersChanged();
+    void tmdbApiKeyChanged();
 
 private:
+    struct PosterFetchTask {
+        QString url;
+        QString originalTitle;
+        QString cleanTitle;
+        QString year;
+        QString type; // "movie" or "series"
+        bool retriedOtherType = false;
+    };
+
     struct HistoryEntry {
         QString url;
         QString title;          // raw file name (decoded)
@@ -110,6 +134,10 @@ private:
 
     void loadPosters();
     void savePosters();
+    void processPosterQueue();
+    void executePosterFetch(const PosterFetchTask &task);
+    void handleCinemetaResponse(const PosterFetchTask &task, const QByteArray &data);
+    void handleTmdbResponse(const PosterFetchTask &task, const QByteArray &data);
 
     void loadHistory();
     void scheduleSave();
@@ -130,6 +158,15 @@ private:
     QTimer m_posterSaveTimer;
     int m_posterRevision = 0;
     bool m_postersDirty = false;
+
+    QNetworkAccessManager *m_posterNam = nullptr;
+    QList<PosterFetchTask> m_posterQueue;
+    QSet<QString> m_pendingPosterFetches;
+    QSet<QString> m_failedPosterFetches;
+    int m_activePosterRequests = 0;
+    bool m_autoFetchPosters = true;
+    QString m_tmdbApiKey;
+
     QHash<QString, HistoryEntry> m_history;
     QString m_currentKey;
     QString m_currentPlaybackKey;

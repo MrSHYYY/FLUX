@@ -62,11 +62,110 @@ SeriesLocation seriesLocation(const QString &mediaUrl) {
     const QString folderUrl = url.toString(QUrl::FullyEncoded);
     return {folderUrl.toCaseFolded(), folderUrl, QUrl::fromPercentEncoding(parts.constLast().toUtf8())};
 }
+
+struct CleanMediaResult {
+    QString title;
+    QString year;
+    QString type; // "movie" or "series"
+};
+
+CleanMediaResult cleanMediaTitle(const QString &rawInput, bool isFolderHint) {
+    if (rawInput.trimmed().isEmpty()) return {};
+
+    QString s = QUrl::fromPercentEncoding(rawInput.toUtf8()).trimmed();
+
+    // Strip common video extensions
+    static const QRegularExpression extRe(
+        QStringLiteral("\\.(mkv|mp4|avi|mov|flv|ts|m4v|webm|iso|vob|wmv|mpg|mpeg)$"),
+        QRegularExpression::CaseInsensitiveOption);
+    s.remove(extRe);
+
+    // Detect series markers
+    static const QRegularExpression seriesRe(
+        QStringLiteral("\\b(S\\d{1,2}(?:E\\d{1,2})?|Season\\s*\\d{1,2}|Series|Complete)\\b"),
+        QRegularExpression::CaseInsensitiveOption);
+    QRegularExpressionMatch seriesMatch = seriesRe.match(s);
+    const bool isSeries = isFolderHint ? (seriesMatch.hasMatch() || s.contains(QStringLiteral("Season"), Qt::CaseInsensitive) || s.contains(QStringLiteral("Series"), Qt::CaseInsensitive)) : seriesMatch.hasMatch();
+
+    // Strip bracketed content [Dual Audio], [1080p], etc.
+    static const QRegularExpression bracketRe(QStringLiteral("\\[[^\\]]*\\]"));
+    s.remove(bracketRe);
+
+    // Strip trailing release group tags like "-afm72", "-Pahe", "-HDHub", "-mkvC"
+    static const QRegularExpression groupRe(QStringLiteral("\\s*-\\s*[A-Za-z0-9_.]+$"));
+    s.remove(groupRe);
+
+    // Replace dots, underscores with spaces
+    s.replace(QLatin1Char('.'), QLatin1Char(' '));
+    s.replace(QLatin1Char('_'), QLatin1Char(' '));
+
+    QString year;
+    QString cleanTitle;
+    const QString mediaType = isSeries ? QStringLiteral("series") : QStringLiteral("movie");
+
+    if (seriesMatch.hasMatch()) {
+        const int idx = seriesMatch.capturedStart();
+        QString titlePart = s.left(idx).trimmed();
+        static const QRegularExpression ymRe(QStringLiteral("\\(?(19\\d\\d|20\\d\\d)\\)?"));
+        QRegularExpressionMatch ym = ymRe.match(titlePart);
+        if (ym.hasMatch()) {
+            year = ym.captured(1);
+            titlePart = titlePart.left(ym.capturedStart()).trimmed();
+        }
+        cleanTitle = titlePart;
+    } else {
+        // Look for (YYYY)
+        static const QRegularExpression parenYearRe(QStringLiteral("\\((19\\d\\d|20\\d\\d)\\)"));
+        QRegularExpressionMatch parenMatch = parenYearRe.match(s);
+        if (parenMatch.hasMatch()) {
+            year = parenMatch.captured(1);
+            cleanTitle = s.left(parenMatch.capturedStart()).trimmed();
+        } else {
+            // Look for isolated 4-digit years
+            static const QRegularExpression wordYearRe(QStringLiteral("\\b(19\\d\\d|20\\d\\d)\\b"));
+            auto it = wordYearRe.globalMatch(s);
+            QList<QRegularExpressionMatch> matches;
+            while (it.hasNext()) matches.append(it.next());
+
+            if (!matches.isEmpty()) {
+                if (matches.size() > 1 && matches.first().captured(1) == QLatin1String("2049")) {
+                    year = matches.at(1).captured(1);
+                    cleanTitle = s.left(matches.at(1).capturedStart()).trimmed();
+                } else {
+                    year = matches.last().captured(1);
+                    cleanTitle = s.left(matches.last().capturedStart()).trimmed();
+                }
+            } else {
+                // No year found, remove common quality tags
+                static const QRegularExpression tagsRe(
+                    QStringLiteral("\\b(1080p|720p|2160p|4k|rm4k|uhd|imax|bluray|blu-ray|bdrip|brrip|web-dl|webrip|web|amzn-web|amzn|hdtv|dvdrip|dvd|"
+                                   "x264|x265|hevc|h264|h265|avc|10bit|8bit|aac|ac3|dts|ddp5\\.1|dd5\\.1|5\\.1|7\\.1|atmos|truehd|"
+                                   "esub|esubs|msub|msubs|sub|subs|dual\\s*audio|multi\\s*audio|hindi|bengali|bangla|english|remux|repack|proper|"
+                                   "extended|unrated|directors\\s*cut|criterion)\\b"),
+                    QRegularExpression::CaseInsensitiveOption);
+                s.remove(tagsRe);
+                cleanTitle = s;
+            }
+        }
+    }
+
+    // Clean up residual punctuation and extra whitespace
+    static const QRegularExpression trimCharsRe(QStringLiteral("^[\\s\\(\\)\\[\\]\\-_.,]+|[\\s\\(\\)\\[\\]\\-_.,]+$"));
+    cleanTitle.remove(trimCharsRe);
+    static const QRegularExpression multiSpaceRe(QStringLiteral("\\s+"));
+    cleanTitle.replace(multiSpaceRe, QStringLiteral(" "));
+
+    return {cleanTitle.trimmed(), year, mediaType};
+}
 }
 
 UserStore::UserStore(QObject *parent)
     : QObject(parent)
     , m_settings(QSettings::IniFormat, QSettings::UserScope, QStringLiteral("FLUX"), QStringLiteral("FLUX")) {
+
+    m_posterNam = new QNetworkAccessManager(this);
+    m_autoFetchPosters = m_settings.value(QStringLiteral("posters/autoFetch"), true).toBool();
+    m_tmdbApiKey = m_settings.value(QStringLiteral("posters/tmdbApiKey"), QString()).toString();
 
     const QFileInfo settingsInfo(m_settings.fileName());
     QDir().mkpath(settingsInfo.absolutePath());
@@ -489,6 +588,29 @@ void UserStore::setIccftpSession(const QString &session) {
     emit serverChanged();
 }
 
+bool UserStore::autoFetchPosters() const {
+    return m_autoFetchPosters;
+}
+
+void UserStore::setAutoFetchPosters(bool enabled) {
+    if (m_autoFetchPosters == enabled) return;
+    m_autoFetchPosters = enabled;
+    setValue(QStringLiteral("posters/autoFetch"), enabled);
+    emit autoFetchPostersChanged();
+}
+
+QString UserStore::tmdbApiKey() const {
+    return m_tmdbApiKey;
+}
+
+void UserStore::setTmdbApiKey(const QString &key) {
+    const QString trimmed = key.trimmed();
+    if (m_tmdbApiKey == trimmed) return;
+    m_tmdbApiKey = trimmed;
+    setValue(QStringLiteral("posters/tmdbApiKey"), trimmed);
+    emit tmdbApiKeyChanged();
+}
+
 void UserStore::testServerConnection(int server, const QString &customUrl, const QJSValue &callback) {
     auto *nam = new QNetworkAccessManager(this);
     QUrl targetUrl;
@@ -714,6 +836,286 @@ void UserStore::savePosters() {
     if (file.commit()) m_postersDirty = false;
 }
 
+void UserStore::clearPosters() {
+    m_posters.clear();
+    m_seriesFolders.clear();
+    m_pendingPosterFetches.clear();
+    m_failedPosterFetches.clear();
+    m_posterQueue.clear();
+    m_postersDirty = true;
+    savePosters();
+    ++m_posterRevision;
+    emit postersChanged();
+}
+
+void UserStore::fetchPoster(const QString &url, const QString &title, bool isFolder) {
+    if (!m_autoFetchPosters) return;
+
+    // Fast check: already have it?
+    const QString existing = posterFor(url, title);
+    if (!existing.isEmpty()) return;
+
+    const QString raw = title.trimmed().isEmpty() ? nameFromUrl(url) : title;
+    if (raw.trimmed().isEmpty()) return;
+
+    const QString uKey = posterKey(url);
+    const QString tKey = titleKey(raw);
+
+    // Negative cache check
+    if ((!uKey.isEmpty() && m_failedPosterFetches.contains(uKey)) ||
+        (!tKey.isEmpty() && m_failedPosterFetches.contains(tKey))) {
+        return;
+    }
+
+    // In-flight check
+    if ((!uKey.isEmpty() && m_pendingPosterFetches.contains(uKey)) ||
+        (!tKey.isEmpty() && m_pendingPosterFetches.contains(tKey))) {
+        return;
+    }
+
+    CleanMediaResult cleaned = cleanMediaTitle(raw, isFolder);
+    if (cleaned.title.trimmed().isEmpty()) {
+        if (!uKey.isEmpty()) m_failedPosterFetches.insert(uKey);
+        if (!tKey.isEmpty()) m_failedPosterFetches.insert(tKey);
+        return;
+    }
+
+    const QString cleanedTKey = titleKey(cleaned.title);
+    auto it = m_posters.constFind(cleanedTKey);
+    if (it != m_posters.constEnd() && !it->url.isEmpty()) {
+        rememberPoster(url, it->url, raw);
+        return;
+    }
+
+    if (m_failedPosterFetches.contains(cleanedTKey) || m_pendingPosterFetches.contains(cleanedTKey)) {
+        return;
+    }
+
+    if (!uKey.isEmpty()) m_pendingPosterFetches.insert(uKey);
+    if (!tKey.isEmpty()) m_pendingPosterFetches.insert(tKey);
+    m_pendingPosterFetches.insert(cleanedTKey);
+
+    PosterFetchTask task;
+    task.url = url;
+    task.originalTitle = raw;
+    task.cleanTitle = cleaned.title;
+    task.year = cleaned.year;
+    task.type = cleaned.type;
+
+    m_posterQueue.append(task);
+    processPosterQueue();
+}
+
+void UserStore::processPosterQueue() {
+    if (!m_posterNam || !m_autoFetchPosters) return;
+    constexpr int kMaxConcurrent = 4;
+    while (m_activePosterRequests < kMaxConcurrent && !m_posterQueue.isEmpty()) {
+        PosterFetchTask task = m_posterQueue.takeFirst();
+        ++m_activePosterRequests;
+        executePosterFetch(task);
+    }
+}
+
+void UserStore::executePosterFetch(const PosterFetchTask &task) {
+    if (!m_autoFetchPosters) {
+        --m_activePosterRequests;
+        processPosterQueue();
+        return;
+    }
+
+    const QString tmdbKey = tmdbApiKey();
+    if (!tmdbKey.isEmpty()) {
+        QUrl url(QStringLiteral("https://api.themoviedb.org/3/search/multi"));
+        QUrlQuery query;
+        query.addQueryItem(QStringLiteral("api_key"), tmdbKey);
+        query.addQueryItem(QStringLiteral("query"), task.cleanTitle);
+        query.addQueryItem(QStringLiteral("include_adult"), QStringLiteral("false"));
+        if (!task.year.isEmpty()) {
+            query.addQueryItem(QStringLiteral("year"), task.year);
+        }
+        url.setQuery(query);
+
+        QNetworkRequest req(url);
+        req.setAttribute(QNetworkRequest::RedirectPolicyAttribute, QNetworkRequest::NoLessSafeRedirectPolicy);
+        req.setHeader(QNetworkRequest::UserAgentHeader, QStringLiteral("FLUX/2.0 (Windows)"));
+
+        QNetworkReply *reply = m_posterNam->get(req);
+        connect(reply, &QNetworkReply::finished, this, [this, reply, task]() {
+            reply->deleteLater();
+            --m_activePosterRequests;
+            if (reply->error() == QNetworkReply::NoError) {
+                handleTmdbResponse(task, reply->readAll());
+            } else {
+                m_failedPosterFetches.insert(posterKey(task.url));
+                if (!task.originalTitle.isEmpty()) m_failedPosterFetches.insert(titleKey(task.originalTitle));
+                m_failedPosterFetches.insert(titleKey(task.cleanTitle));
+                m_pendingPosterFetches.remove(posterKey(task.url));
+                m_pendingPosterFetches.remove(titleKey(task.originalTitle));
+                m_pendingPosterFetches.remove(titleKey(task.cleanTitle));
+            }
+            processPosterQueue();
+        });
+    } else {
+        const QString type = task.type.isEmpty() ? QStringLiteral("movie") : task.type;
+        const QString encodedQuery = QUrl::toPercentEncoding(task.cleanTitle);
+        const QString endpoint = QStringLiteral("https://v3-cinemeta.strem.io/catalog/%1/top/search=%2.json")
+                                    .arg(type, encodedQuery);
+
+        const QUrl targetUrl(endpoint);
+        QNetworkRequest req(targetUrl);
+        req.setAttribute(QNetworkRequest::RedirectPolicyAttribute, QNetworkRequest::NoLessSafeRedirectPolicy);
+        req.setHeader(QNetworkRequest::UserAgentHeader, QStringLiteral("Mozilla/5.0 (Windows NT 10.0; Win64; x64) FLUX/2.0"));
+
+        QNetworkReply *reply = m_posterNam->get(req);
+        connect(reply, &QNetworkReply::finished, this, [this, reply, task]() {
+            reply->deleteLater();
+            --m_activePosterRequests;
+            if (reply->error() == QNetworkReply::NoError) {
+                handleCinemetaResponse(task, reply->readAll());
+            } else {
+                m_failedPosterFetches.insert(posterKey(task.url));
+                if (!task.originalTitle.isEmpty()) m_failedPosterFetches.insert(titleKey(task.originalTitle));
+                m_failedPosterFetches.insert(titleKey(task.cleanTitle));
+                m_pendingPosterFetches.remove(posterKey(task.url));
+                m_pendingPosterFetches.remove(titleKey(task.originalTitle));
+                m_pendingPosterFetches.remove(titleKey(task.cleanTitle));
+            }
+            processPosterQueue();
+        });
+    }
+}
+
+void UserStore::handleCinemetaResponse(const PosterFetchTask &task, const QByteArray &data) {
+    QJsonParseError err;
+    const QJsonDocument doc = QJsonDocument::fromJson(data, &err);
+    if (!doc.isObject()) {
+        m_failedPosterFetches.insert(posterKey(task.url));
+        if (!task.originalTitle.isEmpty()) m_failedPosterFetches.insert(titleKey(task.originalTitle));
+        m_failedPosterFetches.insert(titleKey(task.cleanTitle));
+        m_pendingPosterFetches.remove(posterKey(task.url));
+        m_pendingPosterFetches.remove(titleKey(task.originalTitle));
+        m_pendingPosterFetches.remove(titleKey(task.cleanTitle));
+        return;
+    }
+
+    const QJsonArray metas = doc.object().value(QStringLiteral("metas")).toArray();
+    if (metas.isEmpty()) {
+        // Retry alternative type (e.g. series instead of movie) once if not yet done
+        if (!task.retriedOtherType) {
+            PosterFetchTask retryTask = task;
+            retryTask.retriedOtherType = true;
+            retryTask.type = (task.type == QLatin1String("movie")) ? QStringLiteral("series") : QStringLiteral("movie");
+            m_posterQueue.prepend(retryTask);
+            return;
+        }
+        m_failedPosterFetches.insert(posterKey(task.url));
+        if (!task.originalTitle.isEmpty()) m_failedPosterFetches.insert(titleKey(task.originalTitle));
+        m_failedPosterFetches.insert(titleKey(task.cleanTitle));
+        m_pendingPosterFetches.remove(posterKey(task.url));
+        m_pendingPosterFetches.remove(titleKey(task.originalTitle));
+        m_pendingPosterFetches.remove(titleKey(task.cleanTitle));
+        return;
+    }
+
+    m_pendingPosterFetches.remove(posterKey(task.url));
+    m_pendingPosterFetches.remove(titleKey(task.originalTitle));
+    m_pendingPosterFetches.remove(titleKey(task.cleanTitle));
+
+    QString chosenPoster;
+    const QString targetClean = task.cleanTitle.trimmed().toCaseFolded();
+
+    // 1. Try exact name match
+    for (const QJsonValue &v : metas) {
+        const QJsonObject obj = v.toObject();
+        const QString name = obj.value(QStringLiteral("name")).toString().trimmed().toCaseFolded();
+        const QString poster = obj.value(QStringLiteral("poster")).toString().trimmed();
+        if (poster.isEmpty()) continue;
+
+        if (name == targetClean) {
+            chosenPoster = poster;
+            break;
+        }
+    }
+
+    // 2. Try year match if not found
+    if (chosenPoster.isEmpty() && !task.year.isEmpty()) {
+        for (const QJsonValue &v : metas) {
+            const QJsonObject obj = v.toObject();
+            const QString y = obj.value(QStringLiteral("year")).toVariant().toString();
+            const QString poster = obj.value(QStringLiteral("poster")).toString().trimmed();
+            if (poster.isEmpty()) continue;
+
+            if (y.contains(task.year)) {
+                chosenPoster = poster;
+                break;
+            }
+        }
+    }
+
+    // 3. Fallback to first non-empty poster
+    if (chosenPoster.isEmpty()) {
+        for (const QJsonValue &v : metas) {
+            const QString poster = v.toObject().value(QStringLiteral("poster")).toString().trimmed();
+            if (!poster.isEmpty()) {
+                chosenPoster = poster;
+                break;
+            }
+        }
+    }
+
+    if (!chosenPoster.isEmpty()) {
+        // Upgrade IMDb poster resolution to SX500 for crisp card artwork
+        static const QRegularExpression imdbResRe(QStringLiteral("@\\._V1_.*\\.jpg$"));
+        chosenPoster.replace(imdbResRe, QStringLiteral("@._V1_SX500.jpg"));
+
+        rememberPoster(task.url, chosenPoster, task.originalTitle);
+        if (!task.cleanTitle.isEmpty()) {
+            rememberPoster(QString(), chosenPoster, task.cleanTitle);
+        }
+    } else {
+        m_failedPosterFetches.insert(posterKey(task.url));
+        if (!task.originalTitle.isEmpty()) m_failedPosterFetches.insert(titleKey(task.originalTitle));
+        m_failedPosterFetches.insert(titleKey(task.cleanTitle));
+    }
+}
+
+void UserStore::handleTmdbResponse(const PosterFetchTask &task, const QByteArray &data) {
+    m_pendingPosterFetches.remove(posterKey(task.url));
+    m_pendingPosterFetches.remove(titleKey(task.originalTitle));
+    m_pendingPosterFetches.remove(titleKey(task.cleanTitle));
+
+    const QJsonDocument doc = QJsonDocument::fromJson(data);
+    if (!doc.isObject()) {
+        m_failedPosterFetches.insert(posterKey(task.url));
+        if (!task.originalTitle.isEmpty()) m_failedPosterFetches.insert(titleKey(task.originalTitle));
+        m_failedPosterFetches.insert(titleKey(task.cleanTitle));
+        return;
+    }
+
+    const QJsonArray results = doc.object().value(QStringLiteral("results")).toArray();
+    QString chosenPoster;
+
+    for (const QJsonValue &v : results) {
+        const QJsonObject obj = v.toObject();
+        const QString posterPath = obj.value(QStringLiteral("poster_path")).toString().trimmed();
+        if (!posterPath.isEmpty()) {
+            chosenPoster = QStringLiteral("https://image.tmdb.org/t/p/w500") + posterPath;
+            break;
+        }
+    }
+
+    if (!chosenPoster.isEmpty()) {
+        rememberPoster(task.url, chosenPoster, task.originalTitle);
+        if (!task.cleanTitle.isEmpty()) {
+            rememberPoster(QString(), chosenPoster, task.cleanTitle);
+        }
+    } else {
+        m_failedPosterFetches.insert(posterKey(task.url));
+        if (!task.originalTitle.isEmpty()) m_failedPosterFetches.insert(titleKey(task.originalTitle));
+        m_failedPosterFetches.insert(titleKey(task.cleanTitle));
+    }
+}
+
 // ----------------------------------------------------------------------------
 // Persistence
 // ----------------------------------------------------------------------------
@@ -803,6 +1205,8 @@ void UserStore::shutdown() {
     writeHistory();
     m_posterSaveTimer.stop();
     savePosters();
+    m_posterQueue.clear();
+    m_pendingPosterFetches.clear();
     m_settings.sync();
 }
 

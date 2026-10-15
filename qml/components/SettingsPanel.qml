@@ -393,6 +393,125 @@ Popup {
                     }
                 }
 
+                // ---- Metadata & Posters ----
+                SectionLabel {
+                    text: "METADATA & POSTERS"
+                    Layout.leftMargin: 22
+                    Layout.topMargin: 20
+                }
+
+                Rectangle {
+                    Layout.fillWidth: true
+                    Layout.leftMargin: 22
+                    Layout.rightMargin: 22
+                    Layout.topMargin: 10
+                    implicitHeight: metadataColumn.implicitHeight + 36
+                    radius: 14
+                    color: Theme.surface
+                    border.width: 1
+                    border.color: Theme.border
+
+                    ColumnLayout {
+                        id: metadataColumn
+                        anchors.fill: parent
+                        anchors.margins: 18
+                        spacing: 14
+
+                        RowLayout {
+                            Layout.fillWidth: true
+                            spacing: 12
+
+                            ColumnLayout {
+                                spacing: 2
+                                Layout.fillWidth: true
+
+                                Text {
+                                    text: "Auto-fetch posters & banners"
+                                    color: Theme.text
+                                    font.pixelSize: 14
+                                    font.weight: Font.DemiBold
+                                }
+
+                                Text {
+                                    text: "Automatically fetch high-res artwork for Dhaka Flix and local media"
+                                    color: Theme.textMute
+                                    font.pixelSize: 12
+                                    wrapMode: Text.Wrap
+                                    Layout.fillWidth: true
+                                }
+                            }
+
+                            ToggleSwitch {
+                                checked: fluxUser ? fluxUser.autoFetchPosters : true
+                                onToggled: function(value) { if (fluxUser) fluxUser.autoFetchPosters = value }
+                            }
+                        }
+
+                        ColumnLayout {
+                            Layout.fillWidth: true
+                            spacing: 6
+
+                            Text {
+                                text: "Custom TMDB API Key (Optional)"
+                                color: Theme.text
+                                font.pixelSize: 13
+                                font.weight: Font.DemiBold
+                            }
+
+                            Rectangle {
+                                Layout.fillWidth: true
+                                implicitHeight: 40
+                                radius: 10
+                                color: Theme.bg
+                                border.width: 1
+                                border.color: Theme.border
+
+                                TextInput {
+                                    id: tmdbKeyInput
+                                    anchors.fill: parent
+                                    anchors.leftMargin: 12
+                                    anchors.rightMargin: 12
+                                    verticalAlignment: TextInput.AlignVCenter
+                                    color: Theme.text
+                                    font.pixelSize: 12
+                                    font.family: Theme.monoFamily
+                                    selectByMouse: true
+                                    text: fluxUser ? fluxUser.tmdbApiKey : ""
+                                    onEditingFinished: {
+                                        if (fluxUser) fluxUser.tmdbApiKey = text.trim()
+                                    }
+
+                                    Text {
+                                        anchors.fill: parent
+                                        verticalAlignment: Text.AlignVCenter
+                                        visible: tmdbKeyInput.text.length === 0
+                                        text: "Leave blank to use Cinemeta open catalog (no key required)"
+                                        color: Theme.textMute
+                                        font.pixelSize: 12
+                                    }
+                                }
+                            }
+                        }
+
+                        RowLayout {
+                            Layout.fillWidth: true
+                            spacing: 12
+
+                            FluxButton {
+                                text: "Clear Poster Cache"
+                                variant: "secondary"
+                                iconName: "refresh"
+                                implicitHeight: 36
+                                onClicked: {
+                                    if (fluxUser) fluxUser.clearPosters()
+                                }
+                            }
+
+                            Item { Layout.fillWidth: true }
+                        }
+                    }
+                }
+
                 // ---- Downloads ----
                 SectionLabel {
                     text: "DOWNLOADS"

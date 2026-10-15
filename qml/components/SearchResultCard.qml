@@ -75,11 +75,15 @@ Item {
     readonly property string posterTop: Theme.posterTop(root.title)
     readonly property string posterBottom: Theme.posterBottom(root.title)
 
-    // Resolved poster URL: explicit posterUrl > remembered poster by URL or title
+    // Resolved poster URL: explicit posterUrl > remembered poster by URL or title > auto-fetch
     readonly property string effectivePosterUrl: {
         if (root.posterUrl && root.posterUrl.length > 0) return root.posterUrl
         var rev = fluxUser ? fluxUser.posterRevision : 0
-        return fluxUser ? fluxUser.posterFor(root.playUrl, root.title) : ""
+        var p = fluxUser ? fluxUser.posterFor(root.playUrl, root.title) : ""
+        if (p.length === 0 && fluxUser && (root.playUrl.length > 0 || root.title.length > 0)) {
+            fluxUser.fetchPoster(root.playUrl, root.title, root.isFolder)
+        }
+        return p
     }
 
     // Big outlined mark on the poster: episode number > year > first letter
@@ -175,18 +179,20 @@ Item {
             bigText: root.bigText
             isFolder: root.isFolder
             hovered: root.hovered
-            visible: !posterImage.visible || posterImage.status !== Image.Ready
+            visible: posterImage.opacity < 1.0
         }
 
-        // Real image poster (for ICC FTP or any source providing posterUrl)
+        // Real image poster (for ICC FTP or any source providing posterUrl, or auto-fetched)
         Image {
             id: posterImage
             anchors.fill: parent
-            visible: root.effectivePosterUrl.length > 0 && status === Image.Ready
+            visible: opacity > 0
+            opacity: (root.effectivePosterUrl.length > 0 && status === Image.Ready) ? 1.0 : 0.0
             source: root.effectivePosterUrl
             fillMode: Image.PreserveAspectCrop
             asynchronous: true
             cache: true
+            Behavior on opacity { NumberAnimation { duration: 250; easing.type: Easing.OutCubic } }
         }
 
         // Soft top gloss
