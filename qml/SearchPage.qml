@@ -44,18 +44,26 @@ Item {
     readonly property bool searching: (!!fluxSearch && fluxSearch.isSearching)
     readonly property bool browsing: (!!fluxBrowser && fluxBrowser.active)
 
-    // Set by the nav bar's "Bookmarks" link; the bookmarks view stays underneath any folder
-    // opened from it, so Back / the first breadcrumb returns to the bookmarks.
+    // Navigation view states
     property bool bookmarksOpen: false
+    property bool searchOpen: false
+    property bool showAllTrending: false
 
     // Exactly one of the four views is shown at a time
     readonly property bool showBookmarks: root.bookmarksOpen && !root.browsing
-    readonly property bool showHome: !root.hasSearched && !root.browsing && !root.bookmarksOpen
-    readonly property bool showResults: root.hasSearched && !root.browsing && !root.bookmarksOpen
+    readonly property bool showSearch: (root.searchOpen || root.hasSearched) && !root.browsing && !root.bookmarksOpen
+    readonly property bool showHome: !root.showSearch && !root.browsing && !root.bookmarksOpen
+    readonly property bool showResults: root.showSearch
     readonly property bool showBrowser: root.browsing
 
-    readonly property bool navSolid: root.hasSearched || root.browsing || root.bookmarksOpen || homeFlick.contentY > 24
+    readonly property bool navSolid: root.showSearch || root.browsing || root.bookmarksOpen || homeFlick.contentY > 24
     readonly property real pageMargin: Math.max(32, Math.round((root.width - 1240) / 2))
+
+    onShowSearchChanged: {
+        if (showSearch) {
+            topSearchInput.forceActiveFocus()
+        }
+    }
 
     // Shimmering placeholder tiles shown while a listing loads
     component SkeletonFlow: Flow {
@@ -63,7 +71,7 @@ Item {
 
         property bool active: false
 
-        readonly property int cols: Math.max(1, Math.floor((width + 14) / (250 + 14)))
+        readonly property int cols: Math.max(2, Math.floor((width + 14) / (172 + 14)))
         readonly property real cellW: Math.floor((width - (cols - 1) * 14) / cols)
 
         spacing: 14
@@ -73,7 +81,7 @@ Item {
 
             delegate: Rectangle {
                 width: skel.cellW
-                height: Math.round(skel.cellW * 0.62)
+                height: Math.round(skel.cellW * 1.5)
                 radius: 12
                 color: Theme.surface
 
@@ -117,12 +125,18 @@ Item {
             width: homeFlick.width
             spacing: 0
 
+            readonly property real availableWidth: Math.max(300, width - root.pageMargin * 2)
+            readonly property int targetCardW: 172
+            readonly property int cols: Math.max(2, Math.floor((availableWidth + 14) / (targetCardW + 14)))
+            readonly property real cardW: Math.floor((availableWidth - (cols - 1) * 14) / cols)
+            readonly property real cardH: Math.round(cardW * 1.5)
+
             // ---- Continue Watching -------------------------------------------------------
             Item {
                 id: continueSection
 
                 width: homeColumn.width
-                height: continueList.count > 0 ? (root.topInset + 16 + continueHeader.height + 6 + continueList.height + 20) : 0
+                height: continueList.count > 0 ? (root.topInset + 16 + continueHeader.height + 6 + continueList.height + 24) : 0
                 visible: continueList.count > 0
 
                 RowLayout {
@@ -175,15 +189,15 @@ Item {
                     x: root.pageMargin - 7
                     y: continueHeader.y + continueHeader.height + 6
                     width: parent.width - root.pageMargin * 2 + 14
-                    height: 176
+                    height: homeColumn.cardH
                     orientation: ListView.Horizontal
                     clip: true
                     boundsBehavior: Flickable.StopAtBounds
                     model: {
                         var items = fluxUser ? fluxUser.continueWatching : []
+                        items = items.filter(function(item) { return item.isFolder !== true })
                         if (fluxTeleparty && fluxTeleparty.active && fluxSync) {
                             return items.filter(function(item) {
-                                if (item.isFolder === true) return true
                                 return fluxSync.isStreamUrl(item.url)
                             })
                         }
@@ -210,16 +224,15 @@ Item {
                         required property var modelData
                         required property int index
 
-                        width: 262
-                        height: 176
+                        width: homeColumn.cardW
+                        height: homeColumn.cardH
                         title: modelData.title
                         playUrl: modelData.url
                         posterUrl: modelData.posterUrl || ""
                         isFolder: modelData.isFolder === true
                         progress: modelData.fraction
                         showRemove: modelData.isFolder !== true
-                        extraInfo: modelData.isFolder === true ? "Series" :
-                                   root.watchedTimeLabel(modelData.positionMs)
+                        extraInfo: root.watchedTimeLabel(modelData.positionMs)
                         introDelay: Math.min(index, 8) * 45
 
                         onPlayRequested: function(url, itemTitle) {
@@ -241,104 +254,194 @@ Item {
                 }
             }
 
-            // ---- Search ---------------------------------------------------------------
+            // ---- Trending Right Now ----------------------------------------------------
             Item {
-                id: searchArea
+                id: trendingSection
 
                 width: homeColumn.width
-                height: (continueList.count > 0 ? 16 : (root.topInset + 36)) + heroSearch.height + 28
-                clip: true
+                height: trendingLayout.y + trendingLayout.implicitHeight + 40
 
-                // One subtle ambient glow behind the search box
-                GlowOrb {
-                    width: 900
-                    height: 900
-                    x: searchArea.width / 2 - 450
-                    y: heroSearch.y + heroSearch.height / 2 - 450
-                    color: Theme.accent
-                    strength: 0.16
-                }
+                readonly property real availableWidth: homeColumn.availableWidth
+                readonly property int trendingCols: homeColumn.cols
+                readonly property real trendingCardW: homeColumn.cardW
+                readonly property real trendingCardH: homeColumn.cardH
 
-                Rectangle {
-                    id: heroSearch
+                ColumnLayout {
+                    id: trendingLayout
+                    x: root.pageMargin
+                    y: continueList.count > 0 ? 20 : (root.topInset + 16)
+                    width: trendingSection.availableWidth
+                    spacing: 16
 
-                    width: Math.min(searchArea.width - 64, 720)
-                    height: 62
-                    anchors.horizontalCenter: parent.horizontalCenter
-                    y: continueList.count > 0 ? 16 : (root.topInset + 36)
-                    radius: 31
-                    color: "#E62B2D31"
-                    border.width: initialInput.activeFocus ? 2 : 1
-                    border.color: initialInput.activeFocus ? Theme.accent : "#3F4147"
-
-                    Behavior on border.color { ColorAnimation { duration: 180 } }
-
+                    // Header row
                     RowLayout {
-                        anchors.fill: parent
-                        anchors.leftMargin: 24
-                        anchors.rightMargin: 9
-                        spacing: 14
+                        Layout.fillWidth: true
+                        spacing: 12
 
-                        FluxIcon {
-                            name: "search"
-                            size: 22
-                            color: initialInput.activeFocus ? Theme.text : Theme.textMute
-                            Layout.alignment: Qt.AlignVCenter
+                        Text {
+                            text: "Trending Right Now"
+                            color: Theme.text
+                            font.pixelSize: 22
+                            font.weight: Font.Bold
+                            font.letterSpacing: -0.3
                         }
 
-                        TextField {
-                            id: initialInput
-                            Layout.fillWidth: true
-                            placeholderText: "Search movies, shows, episodes..."
-                            placeholderTextColor: Theme.textMute
-                            font.pixelSize: 16
-                            color: Theme.text
-                            selectedTextColor: "#FFFFFF"
-                            selectionColor: Theme.accent
-                            background: null
+                        Rectangle {
+                            height: 20
+                            radius: 10
+                            color: Theme.accentSoft
+                            border.width: 1
+                            border.color: Theme.accentRing
+                            implicitWidth: badgeText.implicitWidth + 14
 
-                            onAccepted: {
-                                if (fluxSearch && text.trim().length > 0) {
-                                    fluxSearch.search(text.trim())
-                                }
+                            Text {
+                                id: badgeText
+                                anchors.centerIn: parent
+                                text: "ICC FTP"
+                                color: Theme.accent
+                                font.pixelSize: 11
+                                font.weight: Font.Bold
                             }
                         }
 
-                        FluxButton {
-                            id: initialSearchBtn
-                            text: "Search"
-                            implicitHeight: 44
-                            enabled: !(fluxSearch && fluxSearch.isSearching)
+                        Item { Layout.fillWidth: true }
 
-                            onClicked: {
-                                if (fluxSearch && initialInput.text.trim().length > 0) {
-                                    fluxSearch.search(initialInput.text.trim())
+                        Text {
+                            visible: !!fluxSearch && fluxSearch.trending && fluxSearch.trending.length > 0
+                            text: root.showAllTrending
+                                ? ("Showing all " + fluxSearch.trending.length)
+                                : ("Top " + Math.min(fluxSearch.trending.length, trendingSection.trendingCols * 2))
+                            color: Theme.textDim
+                            font.pixelSize: 12
+                        }
+                    }
+
+                    // Skeleton loader while fetching
+                    Grid {
+                        Layout.fillWidth: true
+                        columns: trendingSection.trendingCols
+                        columnSpacing: 14
+                        rowSpacing: 14
+                        visible: (fluxSearch && fluxSearch.isTrendingLoading && (!fluxSearch.trending || fluxSearch.trending.length === 0))
+
+                        Repeater {
+                            model: trendingSection.trendingCols * 2
+                            delegate: Rectangle {
+                                width: trendingSection.trendingCardW
+                                height: trendingSection.trendingCardH
+                                radius: 12
+                                color: Theme.surface
+
+                                SequentialAnimation on opacity {
+                                    loops: Animation.Infinite
+                                    NumberAnimation { from: 0.35; to: 0.85; duration: 800; easing.type: Easing.InOutSine }
+                                    NumberAnimation { from: 0.85; to: 0.35; duration: 800; easing.type: Easing.InOutSine }
                                 }
                             }
                         }
                     }
-                }
-            }
 
-            // ---- Categories -------------------------------------------------------------
-            Item {
-                id: browse
-
-                width: homeColumn.width
-                height: browseColumn.implicitHeight + 80
-
-                ColumnLayout {
-                    id: browseColumn
-
-                    x: root.pageMargin
-                    y: 0
-                    width: parent.width - root.pageMargin * 2
-                    spacing: 0
-
-                    CategoryFilterSection {
+                    // Grid of tall rectangular cards (fitting width, 2 rows by default or all when expanded)
+                    Grid {
+                        id: trendingGrid
                         Layout.fillWidth: true
-                        libraryModel: fluxLibrary
-                        searchManager: fluxSearch
+                        columns: trendingSection.trendingCols
+                        columnSpacing: 14
+                        rowSpacing: 14
+                        visible: !(fluxSearch && fluxSearch.isTrendingLoading && (!fluxSearch.trending || fluxSearch.trending.length === 0))
+
+                        Repeater {
+                            model: {
+                                var all = (fluxSearch && fluxSearch.trending) ? fluxSearch.trending : []
+                                if (!root.showAllTrending) {
+                                    return all.slice(0, Math.min(all.length, trendingSection.trendingCols * 2))
+                                }
+                                return all
+                            }
+
+                            delegate: SearchResultCard {
+                                required property var modelData
+                                required property int index
+
+                                width: trendingSection.trendingCardW
+                                height: trendingSection.trendingCardH
+                                title: modelData.title
+                                playUrl: modelData.url
+                                posterUrl: modelData.posterUrl || ""
+                                isFolder: modelData.isFolder === true
+                                progress: 0
+                                showRemove: false
+                                extraInfo: modelData.extraInfo || (modelData.isFolder ? "Series" : "Trending")
+                                introDelay: Math.min(index, 12) * 30
+
+                                onPlayRequested: function(url, itemTitle) {
+                                    root.playMediaRequested(url, itemTitle)
+                                }
+
+                                onFolderRequested: function(url, libName) {
+                                    if (fluxBrowser) fluxBrowser.open(url, libName, "")
+                                }
+
+                                onDownloadRequested: function(url, itemTitle, isPack) {
+                                    root.startDownload(url, itemTitle, isPack)
+                                }
+                            }
+                        }
+                    }
+
+                    // "Show More" / "Show Less" button
+                    RowLayout {
+                        Layout.fillWidth: true
+                        Layout.topMargin: 8
+                        Layout.bottomMargin: 24
+                        visible: (fluxSearch && fluxSearch.trending && fluxSearch.trending.length > trendingSection.trendingCols * 2)
+
+                        Item { Layout.fillWidth: true }
+
+                        Rectangle {
+                            id: showMoreBtn
+                            implicitHeight: 40
+                            implicitWidth: showMoreRow.implicitWidth + 36
+                            radius: 20
+                            color: showMoreMouse.containsMouse ? Theme.surfaceHi : Theme.surface
+                            border.width: 1
+                            border.color: showMoreMouse.containsMouse ? Theme.accent : Theme.border
+
+                            Behavior on color { ColorAnimation { duration: 120 } }
+                            Behavior on border.color { ColorAnimation { duration: 120 } }
+
+                            RowLayout {
+                                id: showMoreRow
+                                anchors.centerIn: parent
+                                spacing: 8
+
+                                Text {
+                                    text: root.showAllTrending ? "Show Less" : "Show More"
+                                    color: showMoreMouse.containsMouse ? "#FFFFFF" : Theme.text
+                                    font.pixelSize: 13
+                                    font.weight: Font.DemiBold
+                                }
+
+                                FluxIcon {
+                                    name: root.showAllTrending ? "chevronUp" : "chevronDown"
+                                    size: 14
+                                    color: showMoreMouse.containsMouse ? Theme.accent : Theme.textDim
+                                    Layout.alignment: Qt.AlignVCenter
+                                }
+                            }
+
+                            MouseArea {
+                                id: showMoreMouse
+                                anchors.fill: parent
+                                hoverEnabled: true
+                                cursorShape: Qt.PointingHandCursor
+                                onClicked: {
+                                    root.showAllTrending = !root.showAllTrending
+                                }
+                            }
+                        }
+
+                        Item { Layout.fillWidth: true }
                     }
                 }
             }
@@ -367,7 +470,178 @@ Item {
 
         Behavior on opacity { NumberAnimation { duration: 260; easing.type: Easing.OutCubic } }
 
-        // Compact search bar
+        // 1. Server selection in the center horizontally
+        RowLayout {
+            Layout.fillWidth: true
+            Layout.topMargin: 4
+            Layout.bottomMargin: 2
+
+            Item { Layout.fillWidth: true }
+
+            Rectangle {
+                id: searchServerSelector
+
+                readonly property int activeServerIndex: (fluxUser && fluxUser.activeServer === 1) ? 1 : 2
+                readonly property bool isWide: root.width >= 700
+
+                implicitHeight: 42
+                implicitWidth: searchSegmentsRow.width + 8
+                radius: 21
+                color: Theme.surface
+                border.width: 1
+                border.color: Theme.border
+
+                // Active sliding pill
+                Rectangle {
+                    height: 34
+                    radius: 17
+                    anchors.verticalCenter: parent.verticalCenter
+                    color: Theme.accent
+                    x: searchSegmentsRow.x + (searchServerSelector.activeServerIndex === 1 ? sseg1.x : sseg2.x)
+                    width: searchServerSelector.activeServerIndex === 1 ? sseg1.width : sseg2.width
+
+                    Behavior on x { NumberAnimation { duration: 160; easing.type: Easing.OutCubic } }
+                    Behavior on width { NumberAnimation { duration: 160; easing.type: Easing.OutCubic } }
+                }
+
+                Row {
+                    id: searchSegmentsRow
+                    anchors.verticalCenter: parent.verticalCenter
+                    x: 4
+                    spacing: 4
+
+                    Item {
+                        id: sseg1
+                        height: 34
+                        width: sseg1Row.implicitWidth + 24
+
+                        Rectangle {
+                            anchors.fill: parent
+                            radius: 17
+                            color: "#1AFFFFFF"
+                            visible: sseg1Mouse.containsMouse && searchServerSelector.activeServerIndex !== 1
+                        }
+
+                        Row {
+                            id: sseg1Row
+                            anchors.centerIn: parent
+                            spacing: 6
+
+                            Rectangle {
+                                width: 6
+                                height: 6
+                                radius: 3
+                                anchors.verticalCenter: parent.verticalCenter
+                                color: "#FFFFFF"
+                                opacity: (searchServerSelector.activeServerIndex === 1) ? 1.0 : 0.0
+                                Behavior on opacity { NumberAnimation { duration: 140 } }
+                            }
+
+                            Text {
+                                text: searchServerSelector.isWide ? "Server 1 (Dhaka Flix)" : "Server 1"
+                                color: searchServerSelector.activeServerIndex === 1 ? "#FFFFFF"
+                                     : (sseg1Mouse.containsMouse ? "#FFFFFF" : Theme.textDim)
+                                font.pixelSize: 13
+                                font.weight: searchServerSelector.activeServerIndex === 1 ? Font.Bold : Font.Normal
+                                anchors.verticalCenter: parent.verticalCenter
+                                Behavior on color { ColorAnimation { duration: 120 } }
+                            }
+                        }
+
+                        MouseArea {
+                            id: sseg1Mouse
+                            anchors.fill: parent
+                            hoverEnabled: true
+                            cursorShape: Qt.PointingHandCursor
+                            onClicked: {
+                                if (fluxUser && fluxUser.activeServer !== 1) {
+                                    categoryFilter.isExpanded = false
+                                    var textQuery = topSearchInput.text.trim()
+                                    fluxUser.activeServer = 1
+                                    if (fluxBrowser && fluxBrowser.active) fluxBrowser.close()
+                                    if (textQuery.length > 0 && fluxSearch && fluxSearch.query !== textQuery) {
+                                        fluxSearch.search(textQuery)
+                                    }
+                                }
+                            }
+                        }
+
+                        FluxToolTip {
+                            visible: sseg1Mouse.containsMouse
+                            delay: 400
+                            text: "Server 1 (Dhaka Flix) \u2014 BDIX directory indexer"
+                        }
+                    }
+
+                    Item {
+                        id: sseg2
+                        height: 34
+                        width: sseg2Row.implicitWidth + 24
+
+                        Rectangle {
+                            anchors.fill: parent
+                            radius: 17
+                            color: "#1AFFFFFF"
+                            visible: sseg2Mouse.containsMouse && searchServerSelector.activeServerIndex !== 2
+                        }
+
+                        Row {
+                            id: sseg2Row
+                            anchors.centerIn: parent
+                            spacing: 6
+
+                            Rectangle {
+                                width: 6
+                                height: 6
+                                radius: 3
+                                anchors.verticalCenter: parent.verticalCenter
+                                color: "#FFFFFF"
+                                opacity: (searchServerSelector.activeServerIndex === 2) ? 1.0 : 0.0
+                                Behavior on opacity { NumberAnimation { duration: 140 } }
+                            }
+
+                            Text {
+                                text: searchServerSelector.isWide ? "Server 2 (ICC FTP)" : "Server 2"
+                                color: searchServerSelector.activeServerIndex === 2 ? "#FFFFFF"
+                                     : (sseg2Mouse.containsMouse ? "#FFFFFF" : Theme.textDim)
+                                font.pixelSize: 13
+                                font.weight: searchServerSelector.activeServerIndex === 2 ? Font.Bold : Font.Normal
+                                anchors.verticalCenter: parent.verticalCenter
+                                Behavior on color { ColorAnimation { duration: 120 } }
+                            }
+                        }
+
+                        MouseArea {
+                            id: sseg2Mouse
+                            anchors.fill: parent
+                            hoverEnabled: true
+                            cursorShape: Qt.PointingHandCursor
+                            onClicked: {
+                                if (fluxUser && fluxUser.activeServer !== 2) {
+                                    categoryFilter.isExpanded = false
+                                    var textQuery = topSearchInput.text.trim()
+                                    fluxUser.activeServer = 2
+                                    if (fluxBrowser && fluxBrowser.active) fluxBrowser.close()
+                                    if (textQuery.length > 0 && fluxSearch && fluxSearch.query !== textQuery) {
+                                        fluxSearch.search(textQuery)
+                                    }
+                                }
+                            }
+                        }
+
+                        FluxToolTip {
+                            visible: sseg2Mouse.containsMouse
+                            delay: 400
+                            text: "Server 2 (ICC FTP) \u2014 Direct high-speed streaming"
+                        }
+                    }
+                }
+            }
+
+            Item { Layout.fillWidth: true }
+        }
+
+        // 2. Search bar
         RowLayout {
             Layout.fillWidth: true
             spacing: 12
@@ -409,6 +683,7 @@ Item {
 
                         onAccepted: {
                             if (fluxSearch && text.trim().length > 0) {
+                                categoryFilter.isExpanded = false
                                 fluxSearch.search(text.trim())
                             }
                         }
@@ -428,6 +703,7 @@ Item {
                         onClicked: {
                             topSearchInput.text = ""
                             if (fluxSearch) fluxSearch.clear()
+                            categoryFilter.isExpanded = true
                         }
                     }
                 }
@@ -441,24 +717,67 @@ Item {
 
                 onClicked: {
                     if (fluxSearch && topSearchInput.text.trim().length > 0) {
+                        categoryFilter.isExpanded = false
                         fluxSearch.search(topSearchInput.text.trim())
                     }
                 }
             }
         }
 
-        // Category filters
+        // 3. Category filters (collapsible, automatically collapses on search)
         CategoryFilterSection {
+            id: categoryFilter
             Layout.fillWidth: true
             libraryModel: fluxLibrary
             searchManager: fluxSearch
             collapsible: true
-            isExpanded: false
+            isExpanded: true
 
             onSelectionChanged: {
                 if (fluxSearch && topSearchInput.text.trim().length > 0) {
+                    categoryFilter.isExpanded = false
                     fluxSearch.search(topSearchInput.text.trim())
                 }
+            }
+        }
+
+        // State: idle / welcome prompt when no search has been performed
+        ColumnLayout {
+            Layout.alignment: Qt.AlignHCenter
+            Layout.topMargin: 40
+            spacing: 12
+            visible: !!fluxSearch && !fluxSearch.isSearching && !fluxSearch.hasResults && !fluxSearch.hasError && fluxSearch.query.length === 0
+
+            Rectangle {
+                Layout.alignment: Qt.AlignHCenter
+                implicitWidth: 64
+                implicitHeight: 64
+                radius: 32
+                color: Theme.surface
+                border.width: 1
+                border.color: Theme.border
+
+                FluxIcon {
+                    anchors.centerIn: parent
+                    name: "search"
+                    size: 28
+                    color: Theme.accent
+                }
+            }
+
+            Text {
+                Layout.alignment: Qt.AlignHCenter
+                text: "Search on " + ((fluxUser && fluxUser.activeServer === 1) ? "Server 1 (Dhaka Flix)" : "Server 2 (ICC FTP)")
+                color: Theme.text
+                font.pixelSize: 20
+                font.weight: Font.Bold
+            }
+
+            Text {
+                Layout.alignment: Qt.AlignHCenter
+                text: "Select categories above or enter a title to discover movies & shows."
+                color: Theme.textDim
+                font.pixelSize: 14
             }
         }
 
@@ -601,7 +920,8 @@ Item {
         GridView {
             id: resultsGrid
 
-            readonly property int columns: Math.max(1, Math.floor(width / 250))
+            readonly property int targetCardW: 172
+            readonly property int columns: Math.max(2, Math.floor(width / targetCardW))
 
             Layout.fillWidth: true
             Layout.fillHeight: true
@@ -609,7 +929,7 @@ Item {
             clip: true
             model: fluxSearch
             cellWidth: Math.floor(width / columns)
-            cellHeight: Math.round(cellWidth * 0.62) + 14
+            cellHeight: Math.round(cellWidth * 1.5)
             boundsBehavior: Flickable.StopAtBounds
             cacheBuffer: 800
 
@@ -746,7 +1066,8 @@ Item {
         GridView {
             id: bookmarksGrid
 
-            readonly property int columns: Math.max(1, Math.floor(width / 250))
+            readonly property int targetCardW: 172
+            readonly property int columns: Math.max(2, Math.floor(width / targetCardW))
 
             Layout.fillWidth: true
             Layout.fillHeight: true
@@ -754,7 +1075,7 @@ Item {
             clip: true
             model: fluxBookmarks
             cellWidth: Math.floor(width / columns)
-            cellHeight: Math.round(cellWidth * 0.62) + 14
+            cellHeight: Math.round(cellWidth * 1.5)
             boundsBehavior: Flickable.StopAtBounds
             cacheBuffer: 800
 
@@ -986,7 +1307,8 @@ Item {
         GridView {
             id: browserGrid
 
-            readonly property int columns: Math.max(1, Math.floor(width / 250))
+            readonly property int targetCardW: 172
+            readonly property int columns: Math.max(2, Math.floor(width / targetCardW))
 
             Layout.fillWidth: true
             Layout.fillHeight: true
@@ -994,7 +1316,7 @@ Item {
             clip: true
             model: fluxBrowser
             cellWidth: Math.floor(width / columns)
-            cellHeight: Math.round(cellWidth * 0.62) + 14
+            cellHeight: Math.round(cellWidth * 1.5)
             boundsBehavior: Flickable.StopAtBounds
             cacheBuffer: 800
 

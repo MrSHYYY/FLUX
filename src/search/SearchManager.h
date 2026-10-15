@@ -45,6 +45,10 @@ class SearchManager : public QAbstractListModel {
     Q_PROPERTY(bool hasError READ hasError NOTIFY errorMessageChanged)
     Q_PROPERTY(QString statusMessage READ statusMessage NOTIFY statusMessageChanged)
 
+    // Trending media from ICC FTP
+    Q_PROPERTY(QVariantList trending READ trending NOTIFY trendingChanged)
+    Q_PROPERTY(bool isTrendingLoading READ isTrendingLoading NOTIFY trendingChanged)
+
 public:
     enum SearchRoles {
         TitleRole = Qt::UserRole + 1,
@@ -120,6 +124,11 @@ public:
     Q_INVOKABLE void cancel();
     Q_INVOKABLE QVariantMap getResult(int index) const;
 
+    // Trending media
+    QVariantList trending() const { return m_trending; }
+    bool isTrendingLoading() const { return m_isTrendingLoading; }
+    Q_INVOKABLE void fetchTrending();
+
 signals:
     void activeServerChanged();
     void iccftpSettingsChanged();
@@ -131,6 +140,7 @@ signals:
     void errorMessageChanged();
     void statusMessageChanged();
     void posterFound(const QString &url, const QString &posterUrl, const QString &title);
+    void trendingChanged();
 
 private:
     void setSearching(bool searching);
@@ -173,6 +183,9 @@ private:
     QString m_statusMessage;
 
     std::vector<SearchResult> m_results;
+
+    QVariantList m_trending;
+    bool m_isTrendingLoading = false;
 };
 
 } // namespace Flux

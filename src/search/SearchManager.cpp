@@ -17,6 +17,7 @@ SearchManager::SearchManager(QObject *parent)
     , m_libraryModel(std::make_unique<MediaLibraryModel>(this)) {
     m_libraryModel->loadServer(m_activeServer, m_iccSession, m_iccUrl);
     applyDefaultSelection();
+    fetchTrending();
 }
 
 // Default selection: English Movies only (falls back to All if the id is missing)
@@ -116,12 +117,24 @@ void SearchManager::setActiveServer(int server) {
     server = (server == 2) ? 2 : 1;
     if (m_activeServer == server) return;
 
+    const QString prevQuery = m_query;
+
     m_activeServer = server;
     FLUX_LOG_INFO("Search", QString("Switched to server %1 (%2)")
                   .arg(server).arg(server == 2 ? "ICC FTP" : "Dhaka Flix"));
 
-    // Results, running searches and play-URL lookups belong to the previous server
-    clear();
+    // Cancel in-flight requests and clear previous results without erasing m_query
+    cancel();
+    beginResetModel();
+    m_results.clear();
+    m_accumulatedResults.clear();
+    m_errorMessage.clear();
+    m_statusMessage.clear();
+    endResetModel();
+    emit resultCountChanged();
+    emit errorMessageChanged();
+    emit statusMessageChanged();
+
     m_resolvedUrls.clear();
 
     if (m_libraryModel) {
@@ -132,6 +145,10 @@ void SearchManager::setActiveServer(int server) {
     emit activeServerChanged();
     emit selectedLibrariesChanged();
     emit selectedLibraryChanged();
+
+    if (!prevQuery.trimmed().isEmpty()) {
+        search(prevQuery.trimmed());
+    }
 }
 
 void SearchManager::setIccftpUrl(const QString &url) {
@@ -205,6 +222,122 @@ void SearchManager::resolvePlayUrl(const QString &url, const QJSValue &callback)
         if (callback.isCallable()) {
             callback.call(QJSValueList{directUrl});
         }
+    });
+}
+
+void SearchManager::fetchTrending() {
+    if (m_isTrendingLoading) return;
+    m_isTrendingLoading = true;
+    emit trendingChanged();
+
+    QUrl baseUrl(m_iccUrl);
+    if (!baseUrl.isValid() || baseUrl.host().isEmpty()) {
+        baseUrl = QUrl("http://10.16.100.244");
+    }
+    const QString origin = QString("%1://%2").arg(baseUrl.scheme(), baseUrl.authority());
+    const QString sessionParam = m_iccSession.isEmpty()
+        ? QStringLiteral("b1bdfdae1f7e206b628274ef7eafadcd6094e07c46cd85b157c595174a369f96")
+        : m_iccSession;
+
+    QString dashUrl = QString("%1/dashboard.php?session=%2").arg(origin, sessionParam);
+    QNetworkRequest req{QUrl(dashUrl)};
+    req.setHeader(QNetworkRequest::UserAgentHeader, "Mozilla/5.0");
+    req.setTransferTimeout(8000);
+
+    auto items = std::make_shared<QVariantList>();
+    auto seenIds = std::make_shared<QSet<QString>>();
+
+    static const QRegularExpression cardRx(
+        QStringLiteral("<a[^>]*href=[\"']([^\"']*play=(\\d+)[^\"']*)[\"'][^>]*>\\s*<img[^>]*src=[\"']([^\"']+)[\"'][^>]*alt=[\"']([^\"']*)[\"']"),
+        QRegularExpression::CaseInsensitiveOption);
+    static const QRegularExpression seriesRegex(
+        QStringLiteral("(?:Season|Episode|Completed|S\\d{1,2}E\\d{1,2})"),
+        QRegularExpression::CaseInsensitiveOption);
+
+    auto parseCards = [this, origin, sessionParam, items, seenIds](const QString &htmlStr) {
+        auto it = cardRx.globalMatch(htmlStr);
+        while (it.hasNext()) {
+            auto m = it.next();
+            QString link = m.captured(1).trimmed();
+            QString id = m.captured(2).trimmed();
+            QString poster = m.captured(3).trimmed();
+            QString title = m.captured(4).trimmed();
+
+            if (id.isEmpty() || title.isEmpty() || seenIds->contains(id)) continue;
+            seenIds->insert(id);
+
+            bool isFolder = seriesRegex.match(title).hasMatch();
+            QString fullPlayUrl = link.startsWith("http://") || link.startsWith("https://")
+                ? link
+                : (origin + "/" + (link.startsWith('/') ? link.mid(1) : link));
+
+            if (!fullPlayUrl.contains("session=") && !sessionParam.isEmpty()) {
+                fullPlayUrl += (fullPlayUrl.contains('?') ? "&session=" : "?session=") + sessionParam;
+            }
+
+            QString fullPosterUrl = poster.startsWith("http://") || poster.startsWith("https://")
+                ? poster
+                : (origin + "/" + (poster.startsWith('/') ? poster.mid(1) : poster));
+
+            QVariantMap item;
+            item[QStringLiteral("title")] = title;
+            item[QStringLiteral("url")] = fullPlayUrl;
+            item[QStringLiteral("posterUrl")] = fullPosterUrl;
+            item[QStringLiteral("isFolder")] = isFolder;
+            item[QStringLiteral("libraryName")] = QStringLiteral("ICC FTP");
+            item[QStringLiteral("extraInfo")] = isFolder ? QStringLiteral("Series") : QStringLiteral("Trending");
+
+            items->append(item);
+            if (!fullPosterUrl.isEmpty()) {
+                emit posterFound(fullPlayUrl, fullPosterUrl, title);
+            }
+        }
+    };
+
+    QNetworkReply *reply = m_networkManager.get(req);
+    connect(reply, &QNetworkReply::finished, this, [this, reply, origin, sessionParam, parseCards, items]() {
+        reply->deleteLater();
+        if (reply->error() == QNetworkReply::NoError) {
+            QString html = QString::fromUtf8(reply->readAll());
+            parseCards(html);
+            m_trending = *items;
+            emit trendingChanged();
+        }
+
+        // Fetch category 74 (4K Movies) as well for additional trending selections
+        QString catUrl = QString("%1/dashboard.php?session=%2&category=74").arg(origin, sessionParam);
+        QNetworkRequest catReq{QUrl(catUrl)};
+        catReq.setHeader(QNetworkRequest::UserAgentHeader, "Mozilla/5.0");
+        catReq.setTransferTimeout(8000);
+
+        QNetworkReply *catReply = m_networkManager.get(catReq);
+        connect(catReply, &QNetworkReply::finished, this, [this, catReply, origin, sessionParam, parseCards, items]() {
+            catReply->deleteLater();
+            if (catReply->error() == QNetworkReply::NoError) {
+                QString catHtml = QString::fromUtf8(catReply->readAll());
+                parseCards(catHtml);
+            }
+            m_trending = *items;
+            emit trendingChanged();
+
+            // Fetch category 36 (TV & Web Series)
+            QString serUrl = QString("%1/dashboard.php?session=%2&category=36").arg(origin, sessionParam);
+            QNetworkRequest serReq{QUrl(serUrl)};
+            serReq.setHeader(QNetworkRequest::UserAgentHeader, "Mozilla/5.0");
+            serReq.setTransferTimeout(8000);
+
+            QNetworkReply *serReply = m_networkManager.get(serReq);
+            connect(serReply, &QNetworkReply::finished, this, [this, serReply, parseCards, items]() {
+                serReply->deleteLater();
+                if (serReply->error() == QNetworkReply::NoError) {
+                    QString serHtml = QString::fromUtf8(serReply->readAll());
+                    parseCards(serHtml);
+                }
+                m_trending = *items;
+                m_isTrendingLoading = false;
+                emit trendingChanged();
+            });
+        });
     });
 }
 

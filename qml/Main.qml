@@ -292,6 +292,19 @@ ApplicationWindow {
             fluxSearch.clear()
         }
         searchPage.bookmarksOpen = false
+        searchPage.searchOpen = false
+    }
+
+    function showSearch() {
+        if (isFullscreen) {
+            toggleFullscreen()
+        }
+        currentPage = "search"
+        if (fluxBrowser) {
+            fluxBrowser.close()
+        }
+        searchPage.bookmarksOpen = false
+        searchPage.searchOpen = true
     }
 
     // Bookmarks: the saved files / folders, shown with the same cards as search results
@@ -303,6 +316,7 @@ ApplicationWindow {
         if (fluxBrowser) {
             fluxBrowser.close()     // show the bookmarks list itself, not a folder opened earlier
         }
+        searchPage.searchOpen = false
         searchPage.bookmarksOpen = true
     }
 
@@ -588,7 +602,7 @@ ApplicationWindow {
             window: window
             solid: searchPage.navSolid || currentPage === "library"
             section: currentPage === "library" ? "library"
-                                                : (currentPage === "search" ? (searchPage.bookmarksOpen ? "bookmarks" : "home") : "")
+                                                : (currentPage === "search" ? (searchPage.bookmarksOpen ? "bookmarks" : (searchPage.showSearch ? "search" : "home")) : "")
             overlayMode: currentPage === "player"
             shown: !window.isFullscreen && (currentPage !== "player" || playerView.showControls || menuOpen)
             offlineLocked: window.inTeleparty
@@ -611,6 +625,7 @@ ApplicationWindow {
                 if (fluxPlayer && fluxPlayer.isPaused) fluxPlayer.resume()
             }
             onHomeClicked: window.returnToHome()
+            onSearchClicked: window.showSearch()
             onBookmarksClicked: window.showBookmarks()
             onLibraryClicked: if (!window.inTeleparty) window.showLibrary()
         }
