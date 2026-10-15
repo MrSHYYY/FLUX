@@ -10,7 +10,7 @@ Item {
     // Space reserved at the top for the overlaid nav bar
     property real topInset: 0
 
-    signal playMediaRequested(string url, string title, string altUrl)
+    signal playMediaRequested(var url, var title, var altUrl)
 
     function watchedTimeLabel(milliseconds) {
         var totalSeconds = Math.floor(milliseconds / 1000)
@@ -242,7 +242,7 @@ Item {
                         introDelay: Math.min(index, 8) * 45
 
                         onPlayRequested: function(url, itemTitle) {
-                            root.playMediaRequested(url, itemTitle)
+                            root.playMediaRequested(url, itemTitle, "")
                         }
 
                         onFolderRequested: function(url, libName) {
@@ -428,7 +428,7 @@ Item {
                                 introDelay: Math.min(index, 12) * 30
 
                                 onPlayRequested: function(url, itemTitle) {
-                                    root.playMediaRequested(url, itemTitle)
+                                    root.playMediaRequested(url, itemTitle, "")
                                 }
 
                                 onFolderRequested: function(url, libName) {
@@ -1436,7 +1436,7 @@ Item {
                 introDelay: (index % 4) * 40
 
                 onPlayRequested: function(url, itemTitle) {
-                    root.playMediaRequested(url, itemTitle)
+                    root.playMediaRequested(url, itemTitle, "")
                 }
 
                 onFolderRequested: function(url, libName) {
@@ -1583,7 +1583,7 @@ Item {
                 onDownloadRequested: function(url, itemTitle, isPack) { root.startDownload(url, itemTitle, isPack) }
 
                 onPlayRequested: function(url, itemTitle) {
-                    root.playMediaRequested(url, itemTitle)
+                    root.playMediaRequested(url, itemTitle, "")
                 }
 
                 onFolderRequested: function(url, libName) {
@@ -1822,7 +1822,7 @@ Item {
                 introDelay: (index % 4) * 40
 
                 onPlayRequested: function(url, itemTitle) {
-                    root.playMediaRequested(url, itemTitle)
+                    root.playMediaRequested(url, itemTitle, "")
                 }
 
                 onFolderRequested: function(url, libName) {

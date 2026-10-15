@@ -883,7 +883,10 @@ void UserStore::fetchPoster(const QString &url, const QString &title, bool isFol
     const QString cleanedTKey = titleKey(cleaned.title);
     auto it = m_posters.constFind(cleanedTKey);
     if (it != m_posters.constEnd() && !it->url.isEmpty()) {
-        rememberPoster(url, it->url, raw);
+        const QString foundUrl = it->url;
+        QTimer::singleShot(0, this, [this, url, foundUrl, raw]() {
+            rememberPoster(url, foundUrl, raw);
+        });
         return;
     }
 

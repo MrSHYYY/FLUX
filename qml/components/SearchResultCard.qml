@@ -75,15 +75,23 @@ Item {
     readonly property string posterTop: Theme.posterTop(root.title)
     readonly property string posterBottom: Theme.posterBottom(root.title)
 
-    // Resolved poster URL: explicit posterUrl > remembered poster by URL or title > auto-fetch
+    // Resolved poster URL: explicit posterUrl > remembered poster by URL or title
     readonly property string effectivePosterUrl: {
         if (root.posterUrl && root.posterUrl.length > 0) return root.posterUrl
         var rev = fluxUser ? fluxUser.posterRevision : 0
-        var p = fluxUser ? fluxUser.posterFor(root.playUrl, root.title) : ""
-        if (p.length === 0 && fluxUser && (root.playUrl.length > 0 || root.title.length > 0)) {
+        return fluxUser ? fluxUser.posterFor(root.playUrl, root.title) : ""
+    }
+
+    onPlayUrlChanged: root.checkFetchPoster()
+    onTitleChanged: root.checkFetchPoster()
+
+    function checkFetchPoster() {
+        if (!fluxUser || root.posterUrl.length > 0) return
+        if (root.playUrl.length === 0 && root.title.length === 0) return
+        var p = fluxUser.posterFor(root.playUrl, root.title)
+        if (p.length === 0) {
             fluxUser.fetchPoster(root.playUrl, root.title, root.isFolder)
         }
-        return p
     }
 
     // Big outlined mark on the poster: episode number > year > first letter
@@ -124,7 +132,10 @@ Item {
 
     Behavior on opacity { NumberAnimation { duration: 420; easing.type: Easing.OutCubic } }
 
-    Component.onCompleted: introTimer.start()
+    Component.onCompleted: {
+        introTimer.start()
+        root.checkFetchPoster()
+    }
 
     Timer {
         id: introTimer
