@@ -43,7 +43,9 @@ public:
 
     bool loadDefault();
     bool loadFromFile(const QString &path);
-    bool loadServer(int serverType, const QString &session = QString());
+    // serverType 1 = Dhaka Flix, 2 = ICC FTP. For ICC FTP the session token and the server's
+    // address (from `baseUrl`, any URL on that server) replace what is stored in the library file.
+    bool loadServer(int serverType, const QString &session = QString(), const QString &baseUrl = QString());
     int serverType() const { return m_serverType; }
 
     const std::vector<MediaRoot>& roots() const { return m_roots; }
@@ -57,6 +59,8 @@ signals:
     void countChanged();
 
 private:
+    void adjustIccRoots(const QString &session, const QString &baseUrl);
+
     std::vector<MediaRoot> m_roots;
     int m_serverType = 1;
 };

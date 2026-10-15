@@ -89,15 +89,24 @@ bool Application::initialize(QQmlApplicationEngine &engine) {
         }
         player->setLanguagePreferences(audioPrefs, subtitlePref);
 
-        // Selected categories (falls back to the built-in default when nothing is saved)
-        QStringList savedCategories = store->value("categories/selected").toStringList();
-        savedCategories.removeAll(QString());
-        search->restoreSelection(savedCategories);
-
         // Multi-server settings (1 = Dhaka Flix, 2 = ICC FTP)
         search->setIccftpUrl(store->iccftpUrl());
         search->setIccftpSession(store->iccftpSession());
         search->setActiveServer(store->activeServer());
+
+        // Selected categories are remembered separately for each server; the built-in default
+        // applies when nothing is saved. Restored again whenever the user switches server.
+        auto restoreCategories = [store, search]() {
+            const int server = search->activeServer();
+            QStringList saved = store->value(QStringLiteral("categories/selected_s%1").arg(server)).toStringList();
+            if (saved.isEmpty() && server == 1) {
+                saved = store->value(QStringLiteral("categories/selected")).toStringList();   // older versions
+            }
+            saved.removeAll(QString());
+            search->restoreSelection(saved);
+        };
+        restoreCategories();
+        connect(search, &SearchManager::activeServerChanged, store, restoreCategories);
 
         connect(store, &UserStore::serverChanged, search, [store, search]() {
             search->setIccftpUrl(store->iccftpUrl());
@@ -117,7 +126,8 @@ bool Application::initialize(QQmlApplicationEngine &engine) {
             store->setValue("audio/preferredSubtitle", player->preferredSubtitle());
         });
         connect(search, &SearchManager::selectedLibrariesChanged, store, [store, search]() {
-            store->setValue("categories/selected", search->selectedCategoryIds());
+            store->setValue(QStringLiteral("categories/selected_s%1").arg(search->activeServer()),
+                            search->selectedCategoryIds());
         });
 
         // Download location (defaults to <Downloads>/FLUX when nothing is saved)

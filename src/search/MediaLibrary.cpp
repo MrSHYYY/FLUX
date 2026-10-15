@@ -7,6 +7,7 @@
 #include <QJsonArray>
 #include <QJsonObject>
 #include <QDir>
+#include <QRegularExpression>
 #include <QUrl>
 
 namespace Flux {
@@ -57,7 +58,33 @@ bool MediaLibraryModel::loadDefault() {
     return loadServer(1);
 }
 
-bool MediaLibraryModel::loadServer(int serverType, const QString &session) {
+// ICC FTP: apply the user's session token and server address to the roots loaded from the
+// library file / built-in list, so nothing about the server is fixed in the data.
+void MediaLibraryModel::adjustIccRoots(const QString &session, const QString &baseUrl) {
+    const QUrl base(baseUrl, QUrl::TolerantMode);
+    const bool haveBase = base.isValid() && !base.host().isEmpty();
+    const QString origin = haveBase ? (base.scheme() + QStringLiteral("://") + base.authority()) : QString();
+
+    static const QRegularExpression reSession(QStringLiteral("session=[a-zA-Z0-9]+"));
+
+    for (auto &root : m_roots) {
+        if (!session.isEmpty() && root.url.contains(QLatin1String("session="))) {
+            root.url.replace(reSession, QStringLiteral("session=") + session);
+        }
+
+        if (haveBase) {
+            QUrl u(root.url, QUrl::TolerantMode);
+            if (u.isValid() && !u.host().isEmpty()) {
+                u.setScheme(base.scheme());
+                u.setAuthority(base.authority());
+                root.url = u.toString(QUrl::FullyEncoded);
+            }
+            root.serverOrigin = origin;
+        }
+    }
+}
+
+bool MediaLibraryModel::loadServer(int serverType, const QString &session, const QString &baseUrl) {
     m_serverType = (serverType == 2) ? 2 : 1;
     const QString filename = (m_serverType == 2) ? QStringLiteral("resources/icc_library.json")
                                                  : QStringLiteral("resources/media_library.json");
@@ -73,12 +100,10 @@ bool MediaLibraryModel::loadServer(int serverType, const QString &session) {
     for (const auto &path : candidates) {
         if (QFile::exists(path)) {
             if (loadFromFile(path)) {
-                if (m_serverType == 2 && !session.isEmpty()) {
-                    for (auto &root : m_roots) {
-                        if (root.url.contains("session=")) {
-                            static const QRegularExpression reSession("session=[a-zA-Z0-9]+");
-                            root.url.replace(reSession, "session=" + session);
-                        }
+                if (m_serverType == 2) {
+                    adjustIccRoots(session, baseUrl);
+                    if (!m_roots.empty()) {
+                        emit dataChanged(index(0), index(static_cast<int>(m_roots.size()) - 1));
                     }
                 }
                 return true;
@@ -134,6 +159,7 @@ bool MediaLibraryModel::loadServer(int serverType, const QString &session) {
             {"wwe_aew", "WWE & AEW Wrestling", "TV & Web Series", "http://172.16.50.10/DHAKA-FLIX-10/WWE%20%26%20AEW%20Wrestling/", "http://172.16.50.10", "/DHAKA-FLIX-10/WWE%20%26%20AEW%20Wrestling/"}
         };
     }
+    if (m_serverType == 2) adjustIccRoots(session, baseUrl);
     endResetModel();
     emit countChanged();
     return true;

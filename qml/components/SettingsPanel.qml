@@ -229,7 +229,7 @@ Popup {
                                     anchors.fill: parent
                                     cursorShape: Qt.PointingHandCursor
                                     onClicked: {
-                                        if (fluxUser) fluxUser.setActiveServer(1)
+                                        if (fluxUser) fluxUser.activeServer = 1
                                         panel.serverTestStatus = ""
                                     }
                                 }
@@ -264,7 +264,7 @@ Popup {
                                     anchors.fill: parent
                                     cursorShape: Qt.PointingHandCursor
                                     onClicked: {
-                                        if (fluxUser) fluxUser.setActiveServer(2)
+                                        if (fluxUser) fluxUser.activeServer = 2
                                         panel.serverTestStatus = ""
                                     }
                                 }
@@ -322,7 +322,7 @@ Popup {
                                     clip: true
                                     onEditingFinished: {
                                         if (fluxUser && text.trim().length > 0) {
-                                            fluxUser.setIccftpUrl(text.trim())
+                                            fluxUser.iccftpUrl = text.trim()
                                         }
                                     }
                                 }
@@ -362,7 +362,7 @@ Popup {
                                 visible: fluxUser && fluxUser.activeServer === 2
                                 onClicked: {
                                     if (fluxUser && serverUrlInput.text.trim().length > 0) {
-                                        fluxUser.setIccftpUrl(serverUrlInput.text.trim())
+                                        fluxUser.iccftpUrl = serverUrlInput.text.trim()
                                         panel.serverTestStatus = "Server settings applied."
                                         panel.serverTestSuccess = true
                                     }

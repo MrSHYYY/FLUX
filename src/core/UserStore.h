@@ -42,12 +42,13 @@ public:
     void setAutoplayNext(bool enabled);
 
     // ---- Media Server (1 = Dhaka Flix, 2 = ICC FTP) ----
+    // The setters are Q_INVOKABLE so QML can call them as methods as well as assign the properties
     int activeServer() const;
-    void setActiveServer(int server);
+    Q_INVOKABLE void setActiveServer(int server);
     QString iccftpUrl() const;
-    void setIccftpUrl(const QString &url);
+    Q_INVOKABLE void setIccftpUrl(const QString &url);
     QString iccftpSession() const;
-    void setIccftpSession(const QString &session);
+    Q_INVOKABLE void setIccftpSession(const QString &session);
     Q_INVOKABLE void testServerConnection(int server, const QString &customUrl, const QJSValue &callback);
 
     // ---- Settings ----

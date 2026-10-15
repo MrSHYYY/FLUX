@@ -15,11 +15,19 @@ namespace Flux {
 SearchManager::SearchManager(QObject *parent)
     : QAbstractListModel(parent)
     , m_libraryModel(std::make_unique<MediaLibraryModel>(this)) {
-    m_libraryModel->loadServer(m_activeServer, m_iccSession);
-    // Default selection: English Movies only (falls back to All if the id is missing)
-    int count = m_libraryModel->rowCount();
-    int defaultIdx = m_libraryModel->indexOfId("icc_eng_movies");
-    if (defaultIdx < 0) defaultIdx = m_libraryModel->indexOfId("english_movies");
+    m_libraryModel->loadServer(m_activeServer, m_iccSession, m_iccUrl);
+    applyDefaultSelection();
+}
+
+// Default selection: English Movies only (falls back to All if the id is missing)
+void SearchManager::applyDefaultSelection() {
+    const int count = m_libraryModel ? m_libraryModel->rowCount() : 0;
+    const int defaultIdx = m_libraryModel
+        ? m_libraryModel->indexOfId(m_activeServer == 2 ? QStringLiteral("icc_eng_movies")
+                                                        : QStringLiteral("english_movies"))
+        : -1;
+
+    m_selectedIndices.clear();
     if (defaultIdx >= 0) {
         m_isAllSelected = (count == 1);
         m_selectedLibraryIndex = defaultIdx;
@@ -105,20 +113,36 @@ QString SearchManager::selectedLibraryUrl() const {
 }
 
 void SearchManager::setActiveServer(int server) {
-    if (m_activeServer != server) {
-        m_activeServer = server;
-        emit activeServerChanged();
-        if (m_libraryModel) {
-            m_libraryModel->loadServer(m_activeServer, m_iccSession);
-            selectLibrary(0);
-        }
+    server = (server == 2) ? 2 : 1;
+    if (m_activeServer == server) return;
+
+    m_activeServer = server;
+    FLUX_LOG_INFO("Search", QString("Switched to server %1 (%2)")
+                  .arg(server).arg(server == 2 ? "ICC FTP" : "Dhaka Flix"));
+
+    // Results, running searches and play-URL lookups belong to the previous server
+    clear();
+    m_resolvedUrls.clear();
+
+    if (m_libraryModel) {
+        m_libraryModel->loadServer(m_activeServer, m_iccSession, m_iccUrl);
+        applyDefaultSelection();   // the app restores the user's saved choice for this server right after
     }
+
+    emit activeServerChanged();
+    emit selectedLibrariesChanged();
+    emit selectedLibraryChanged();
 }
 
 void SearchManager::setIccftpUrl(const QString &url) {
     if (m_iccUrl != url) {
         m_iccUrl = url;
         emit iccftpSettingsChanged();
+        // The categories live on the configured server: re-point them (indexes stay the same,
+        // so the current selection is kept)
+        if (m_activeServer == 2 && m_libraryModel) {
+            m_libraryModel->loadServer(m_activeServer, m_iccSession, m_iccUrl);
+        }
     }
 }
 
@@ -127,7 +151,7 @@ void SearchManager::setIccftpSession(const QString &session) {
         m_iccSession = session;
         emit iccftpSettingsChanged();
         if (m_activeServer == 2 && m_libraryModel) {
-            m_libraryModel->loadServer(m_activeServer, m_iccSession);
+            m_libraryModel->loadServer(m_activeServer, m_iccSession, m_iccUrl);
         }
     }
 }

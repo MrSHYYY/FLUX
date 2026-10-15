@@ -135,6 +135,7 @@ private:
     void setSearching(bool searching);
     void setErrorMessage(const QString &msg);
     void setStatusMessage(const QString &msg);
+    void applyDefaultSelection();   // built-in default category for the active server
 
     // Two-stage search (see SearchQuery): stage 1 sends the literal queries; if that finds few
     // results, stage 2 sends short "anchor" chunks and keeps only candidates that score well.
